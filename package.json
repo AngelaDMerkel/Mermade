@@ -7,15 +7,17 @@
     "node": ">=22.13.0"
   },
   "scripts": {
-    "dev": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext dev",
-    "build": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext build",
-    "build:pages": "GITHUB_ACTIONS=true next build",
+    "patch:mermaid": "node scripts/patch-mermaid-block-renderer.mjs",
+    "dev": "npm run patch:mermaid && WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext dev",
+    "build": "npm run patch:mermaid && WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext build",
+    "build:pages": "npm run patch:mermaid && GITHUB_ACTIONS=true next build",
     "start": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext start",
-    "test": "npm run build && node --test tests/rendered-html.test.mjs",
+    "test": "npm run build && node --test tests/*.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {
+    "@mermaid-js/mermaid-zenuml": "^0.2.3",
     "drizzle-orm": "0.45.2",
     "lucide-react": "^0.468.0",
     "mermaid": "^11.16.0",
@@ -35,6 +37,7 @@
     "drizzle-kit": "0.31.10",
     "eslint": "9.39.4",
     "eslint-config-next": "16.2.6",
+    "playwright-core": "^1.57.0",
     "react-server-dom-webpack": "19.2.6",
     "tailwindcss": "4.2.1",
     "typescript": "5.9.3",

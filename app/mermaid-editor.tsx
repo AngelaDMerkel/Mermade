@@ -5,12 +5,13 @@ import {
   BoxSelect,
   Check,
   ChevronDown,
+  CircleHelp,
   CircleDot,
   Code2,
+  Command,
   Copy,
   Download,
   ExternalLink,
-  Frame,
   Group,
   Link2,
   Maximize2,
@@ -26,10 +27,13 @@ import {
   Trash2,
   Undo2,
   Ungroup,
+  Upload,
+  Workflow,
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
 import {
+  ChangeEvent as ReactChangeEvent,
   PointerEvent as ReactPointerEvent,
   useCallback,
   useEffect,
@@ -37,8 +41,15 @@ import {
   useRef,
   useState,
 } from "react";
+import { SemanticVisualEditor } from "./semantic-visual-editor";
+import { layoutFlowchart } from "./flowchart-layout";
+import { flowchartShapePatch, FLOWCHART_SHAPE_GROUPS, FlowchartVisualShape, mermaidShapeClass, selectedFlowchartShape, visualShapeForMermaid } from "./flowchart-shapes";
+import { diagramNameFromFile, MERMAID_IMPORT_ACCEPT, readImportedMermaid } from "./mermaid-import";
+import { helpForDiagram } from "./mermaid-help";
+import { normalizeRenderedSvg, normalizeSvgMarkup } from "./mermaid-rendering";
+import { detectDiagramType, MERMAID_DIAGRAM_TYPES, visualModeLabel } from "./mermaid-types";
 
-type NodeShape = "rectangle" | "rounded" | "diamond" | "circle" | "hexagon" | "document" | "framed";
+type NodeShape = FlowchartVisualShape;
 type EdgeStyle = "solid" | "dashed" | "thick";
 type ThemeMode = "light" | "dark" | "system";
 type SupportedMermaidVersion = "11.16.0" | "10.9.6";
@@ -84,9 +95,17 @@ type MarqueeSelection = {
   additive: boolean;
 };
 
+type PendingViewAnchor = {
+  nodeId: string;
+  viewportX: number;
+  viewportY: number;
+  targetView: "free" | "mermaid";
+};
+
 type Diagram = {
   name: string;
   direction: "LR" | "TB";
+  source?: string;
   mermaidVersion?: MermaidVersionPreference;
   detectedMermaidVersion?: SupportedMermaidVersion;
   nodes: DiagramNode[];
@@ -94,7 +113,7 @@ type Diagram = {
   groups: DiagramGroup[];
 };
 
-const COLORS = ["#fffdfa", "#fde8f1", "#e6f8f1", "#fff1da", "#e9f2ff", "#ffe9ee", "#e8f8fb", "#f2f3f5"];
+const COLORS = ["#ffffff", "#fffdfa", "#fde8f1", "#e6f8f1", "#fff1da", "#e9f2ff", "#ffe9ee", "#e8f8fb", "#f2f3f5"];
 const BOARD_WIDTH = 3200;
 const BOARD_HEIGHT = 2200;
 const CANVAS_MARGIN = 700;
@@ -121,7 +140,8 @@ function detectMermaidVersion(source: string) {
   if (/@\{\s*[^}]*\bshape\s*:/m.test(source)) {
     return { recommended: LATEST_MERMAID_VERSION, minimum: "11.3.0", label: "Mermaid 11.3+ expanded-shape syntax" };
   }
-  return { recommended: LATEST_MERMAID_VERSION, minimum: "10.0.0", label: "Classic flowchart syntax" };
+  const detectedType = detectDiagramType(source);
+  return { recommended: LATEST_MERMAID_VERSION, minimum: "10.0.0", label: `${detectedType?.label || "Mermaid"} syntax` };
 }
 
 function resolvedMermaidVersion(diagram: Diagram): SupportedMermaidVersion {
@@ -130,8 +150,26 @@ function resolvedMermaidVersion(diagram: Diagram): SupportedMermaidVersion {
 }
 
 async function loadMermaid(version: SupportedMermaidVersion) {
-  if (version === "10.9.6") return (await import("mermaid-v10")).default;
-  return (await import("mermaid")).default;
+  const mermaid = version === "10.9.6" ? (await import("mermaid-v10")).default : (await import("mermaid")).default;
+  if (!registeredMermaidEngines.has(mermaid)) {
+    const zenuml = (await import("@mermaid-js/mermaid-zenuml")).default;
+    await mermaid.registerExternalDiagrams([zenuml]);
+    registeredMermaidEngines.add(mermaid);
+  }
+  return mermaid;
+}
+
+const registeredMermaidEngines = new WeakSet<object>();
+
+async function renderMermaidSvg(mermaid: Awaited<ReturnType<typeof loadMermaid>>, id: string, source: string) {
+  const renderContainer = document.createElement("div");
+  renderContainer.style.cssText = "position:fixed;left:-100000px;top:0;visibility:hidden;pointer-events:none";
+  document.body.appendChild(renderContainer);
+  try {
+    return await mermaid.render(id, source, renderContainer);
+  } finally {
+    renderContainer.remove();
+  }
 }
 
 const initialDiagram: Diagram = {
@@ -232,7 +270,6 @@ function parseMermaid(source: string, previous: Diagram): Diagram | null {
   const groups: DiagramGroup[] = [];
   const styles = new Map<string, { color: string; textColor: string }>();
   let currentGroup: string | undefined;
-  let positionIndex = 0;
 
   const legacyPatterns: Array<[NodeShape, RegExp]> = [
     ["rounded", /^(\w+)\(\["?(.*?)"?\]\)$/],
@@ -243,31 +280,27 @@ function parseMermaid(source: string, previous: Diagram): Diagram | null {
   ];
 
   const shapeFromMermaid = (shape: string): NodeShape => {
-    if (shape === "stadium" || shape === "rounded") return "rounded";
-    if (shape === "diam" || shape === "diamond") return "diamond";
-    if (shape === "circle" || shape === "f-circ") return "circle";
-    if (shape === "hex" || shape === "hexagon") return "hexagon";
-    if (shape === "doc" || shape === "docs" || shape === "lin-doc") return "document";
-    if (shape === "fr-rect" || shape === "div-rect") return "framed";
-    return "rectangle";
+    return visualShapeForMermaid(shape);
   };
 
   const addNode = (id: string, label = id, shape: NodeShape = "rectangle", explicit = false, mermaidShape?: string) => {
+    const estimatedLines = Math.max(1, Math.ceil(label.length / 34));
+    const dimensions = shape === "circle"
+      ? { width: 88, height: 88 }
+      : shape === "diamond"
+        ? { width: Math.min(190, Math.max(126, 92 + label.length * 2)), height: Math.min(138, Math.max(102, 70 + estimatedLines * 19)) }
+        : { width: Math.min(280, Math.max(150, 92 + Math.min(label.length, 34) * 4.5)), height: Math.min(128, Math.max(62, 32 + estimatedLines * 20)) };
     const existing = nodes.get(id);
     if (existing) {
-      if (explicit) nodes.set(id, { ...existing, label, shape, mermaidShape, groupId: currentGroup ?? existing.groupId });
+      if (explicit) nodes.set(id, { ...existing, ...dimensions, label, shape, mermaidShape, groupId: currentGroup ?? existing.groupId });
       return;
     }
     const old = previous.nodes.find((node) => node.id === id);
-    const col = positionIndex % 4;
-    const row = Math.floor(positionIndex / 4);
-    positionIndex += 1;
-    nodes.set(id, old ? { ...old, label, shape, mermaidShape, groupId: currentGroup } : {
+    nodes.set(id, old ? { ...old, ...dimensions, label, shape, mermaidShape, groupId: currentGroup } : {
       id, label, shape, mermaidShape, groupId: currentGroup,
-      x: 100 + col * 230, y: 140 + row * 150,
-      width: shape === "circle" ? 82 : 150,
-      height: shape === "diamond" ? 96 : shape === "circle" ? 82 : 62,
-      color: "#fffdfa", textColor: "#24232a",
+      x: 0, y: 0,
+      ...dimensions,
+      color: "#ffffff", textColor: "#24232a",
     });
   };
 
@@ -335,7 +368,15 @@ function parseMermaid(source: string, previous: Diagram): Diagram | null {
     const node = nodes.get(id);
     if (node) nodes.set(id, { ...node, ...style });
   });
-  return { ...previous, direction, nodes: [...nodes.values()], edges, groups };
+  const parsedNodes = [...nodes.values()];
+  const positions = layoutFlowchart(parsedNodes, edges, direction);
+  return {
+    ...previous,
+    direction,
+    nodes: parsedNodes.map((node) => ({ ...node, ...positions.get(node.id) })),
+    edges,
+    groups,
+  };
 }
 
 function IconButton({ label, shortcut, active, disabled, onClick, children, className = "" }: {
@@ -362,6 +403,9 @@ export function MermaidEditor() {
   const [sourceDirty, setSourceDirty] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [typeMenuOpen, setTypeMenuOpen] = useState(false);
   const [preferences, setPreferences] = useState<EditorPreferences>(DEFAULT_PREFERENCES);
   const [toast, setToast] = useState("");
   const [editingNode, setEditingNode] = useState<string | null>(null);
@@ -373,15 +417,31 @@ export function MermaidEditor() {
   const future = useRef<Diagram[]>([]);
   const boardRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const mermaidStageRef = useRef<HTMLDivElement>(null);
   const mermaidViewRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<null | { startX: number; startY: number; nodes: Map<string, { x: number; y: number }> }>(null);
   const marqueeRef = useRef<MarqueeSelection | null>(null);
+  const marqueeSurfaceRef = useRef<HTMLDivElement | null>(null);
   const edgeCounter = useRef(initialDiagram.edges.length + 1);
   const mermaidRenderCounter = useRef(0);
+  const selectedRef = useRef(selected);
   const shouldFitMermaidRef = useRef(true);
+  const shouldFitFreeformRef = useRef(false);
+  const pendingViewAnchorRef = useRef<PendingViewAnchor | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const typeMenuRef = useRef<HTMLDivElement>(null);
+  const importInputRef = useRef<HTMLInputElement>(null);
 
-  const source = useMemo(() => toMermaid(diagram), [diagram]);
+  const source = useMemo(() => diagram.source ?? toMermaid(diagram), [diagram]);
+  const activeDiagramType = useMemo(() => detectDiagramType(source) || MERMAID_DIAGRAM_TYPES[0], [source]);
+  const activeHelp = useMemo(() => helpForDiagram(activeDiagramType.id), [activeDiagramType.id]);
+  const visualModeName = visualModeLabel(activeDiagramType.family);
+  const visualEditingHelp = activeDiagramType.family === "freeform"
+    ? "FreeForm exposes nodes and relationships spatially. Mermaid view remains available for the exact rendered result and source-level control."
+    : activeDiagramType.family === "structured"
+      ? "Structured editing preserves the ordered statements and interactions that define this diagram. Mermaid view shows the exact rendered result."
+      : "Data editing keeps labels, values, axes, and series explicit while Mermaid view shows the exact rendered result.";
+  const nativeFlowchart = activeDiagramType.id === "flowchart" && diagram.source === undefined;
   const activeMermaidVersion = resolvedMermaidVersion(diagram);
   const sourceVersionDetection = useMemo(() => detectMermaidVersion(sourceDraft), [sourceDraft]);
   const selectedNode = selected.length === 1 ? diagram.nodes.find((node) => node.id === selected[0]) : undefined;
@@ -392,6 +452,28 @@ export function MermaidEditor() {
     setToast(message);
     if (toastTimer.current) clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToast(""), 2200);
+  }, []);
+
+  useEffect(() => {
+    selectedRef.current = selected;
+  }, [selected]);
+
+  const restoreViewAnchor = useCallback((targetView: "free" | "mermaid") => {
+    const pending = pendingViewAnchorRef.current;
+    const scroller = scrollRef.current;
+    if (!pending || pending.targetView !== targetView || !scroller) return false;
+    const root = targetView === "free" ? boardRef.current : mermaidViewRef.current;
+    const element = root?.querySelector<HTMLElement>(`[data-node-id="${CSS.escape(pending.nodeId)}"]`);
+    if (!element) return false;
+
+    const scrollerRect = scroller.getBoundingClientRect();
+    const nodeRect = element.getBoundingClientRect();
+    const nodeX = nodeRect.left + nodeRect.width / 2 - scrollerRect.left;
+    const nodeY = nodeRect.top + nodeRect.height / 2 - scrollerRect.top;
+    scroller.scrollLeft += nodeX - pending.viewportX * scrollerRect.width;
+    scroller.scrollTop += nodeY - pending.viewportY * scrollerRect.height;
+    pendingViewAnchorRef.current = null;
+    return true;
   }, []);
 
   const checkpoint = useCallback(() => {
@@ -427,6 +509,22 @@ export function MermaidEditor() {
       if (savedPreferences) queueMicrotask(() => setPreferences({ ...DEFAULT_PREFERENCES, ...JSON.parse(savedPreferences) }));
     } catch { /* local drafts are best-effort */ }
   }, []);
+
+  useEffect(() => {
+    if (!typeMenuOpen) return;
+    const closeOutside = (event: PointerEvent) => {
+      if (!typeMenuRef.current?.contains(event.target as Node)) setTypeMenuOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setTypeMenuOpen(false);
+    };
+    window.addEventListener("pointerdown", closeOutside);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("pointerdown", closeOutside);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [typeMenuOpen]);
 
   useEffect(() => {
     localStorage.setItem("mermade-diagram", JSON.stringify(diagram));
@@ -473,8 +571,8 @@ export function MermaidEditor() {
         }) }));
       }
 
-      if (marqueeRef.current && boardRef.current) {
-        const rect = boardRef.current.getBoundingClientRect();
+      if (marqueeRef.current && marqueeSurfaceRef.current) {
+        const rect = marqueeSurfaceRef.current.getBoundingClientRect();
         const next = {
           ...marqueeRef.current,
           currentX: (event.clientX - rect.left) / zoom,
@@ -486,25 +584,43 @@ export function MermaidEditor() {
     };
     const onUp = (event: PointerEvent) => {
       dragRef.current = null;
-      if (!marqueeRef.current || !boardRef.current) return;
+      const selectionSurface = marqueeSurfaceRef.current;
+      if (!marqueeRef.current || !selectionSurface) return;
 
-      const boardRect = boardRef.current.getBoundingClientRect();
+      const surfaceRect = selectionSurface.getBoundingClientRect();
       const finished = {
         ...marqueeRef.current,
-        currentX: (event.clientX - boardRect.left) / zoom,
-        currentY: (event.clientY - boardRect.top) / zoom,
+        currentX: (event.clientX - surfaceRect.left) / zoom,
+        currentY: (event.clientY - surfaceRect.top) / zoom,
       };
       const left = Math.min(finished.startX, finished.currentX);
       const top = Math.min(finished.startY, finished.currentY);
       const right = Math.max(finished.startX, finished.currentX);
       const bottom = Math.max(finished.startY, finished.currentY);
       const hasArea = right - left > 3 && bottom - top > 3;
-      const hits = hasArea ? diagram.nodes.filter((node) => (
-        node.x < right && node.x + node.width > left && node.y < bottom && node.y + node.height > top
-      )).map((node) => node.id) : [];
+      let hits: string[] = [];
 
-      setSelected((current) => finished.additive ? [...new Set([...current, ...hits])] : hits);
+      if (hasArea && selectionSurface === mermaidStageRef.current) {
+        const selectionLeft = surfaceRect.left + left * zoom;
+        const selectionTop = surfaceRect.top + top * zoom;
+        const selectionRight = surfaceRect.left + right * zoom;
+        const selectionBottom = surfaceRect.top + bottom * zoom;
+        hits = [...selectionSurface.querySelectorAll<HTMLElement>("[data-node-id]")]
+          .filter((element) => {
+            const rect = element.getBoundingClientRect();
+            return rect.left < selectionRight && rect.right > selectionLeft && rect.top < selectionBottom && rect.bottom > selectionTop;
+          })
+          .map((element) => element.dataset.nodeId)
+          .filter((id): id is string => Boolean(id));
+      } else if (hasArea) {
+        hits = diagram.nodes.filter((node) => (
+          node.x < right && node.x + node.width > left && node.y < bottom && node.y + node.height > top
+        )).map((node) => node.id);
+      }
+
+      setSelected((current) => finished.additive ? [...new Set([...current, ...hits])] : [...new Set(hits)]);
       marqueeRef.current = null;
+      marqueeSurfaceRef.current = null;
       setMarquee(null);
     };
     window.addEventListener("pointermove", onMove);
@@ -530,11 +646,14 @@ export function MermaidEditor() {
           flowchart: { htmlLabels: true, curve: "basis", useMaxWidth: false },
         });
         const renderId = `mermade-view-${mermaidRenderCounter.current++}`;
-        const { svg } = await mermaid.render(renderId, source);
+        // Use a temporary non-React container. Block Diagram measures live DOM,
+        // while its debug serialization cannot traverse React's circular metadata.
+        const { svg } = await renderMermaidSvg(mermaid, renderId, source);
         if (cancelled) return;
 
         host.innerHTML = svg;
         const svgElement = host.querySelector("svg");
+        if (svgElement) normalizeRenderedSvg(svgElement, activeDiagramType.id, source);
         const viewBox = svgElement?.viewBox.baseVal;
         const width = Math.max(480, Math.ceil(viewBox?.width || 1200));
         const height = Math.max(320, Math.ceil(viewBox?.height || 800));
@@ -565,12 +684,14 @@ export function MermaidEditor() {
         });
         host.querySelectorAll<HTMLElement>("[data-node-id], [data-edge-id], [data-group-id]").forEach((element) => {
           const id = element.dataset.nodeId || element.dataset.edgeId || element.dataset.groupId;
-          element.classList.toggle("selected", Boolean(id && selected.includes(id)));
+          element.classList.toggle("selected", Boolean(id && selectedRef.current.includes(id)));
         });
 
         setMermaidSize({ width, height });
         setMermaidRenderError("");
-        if (shouldFitMermaidRef.current && scrollRef.current) {
+        if (pendingViewAnchorRef.current?.targetView === "mermaid") {
+          requestAnimationFrame(() => requestAnimationFrame(() => restoreViewAnchor("mermaid")));
+        } else if (shouldFitMermaidRef.current && scrollRef.current) {
           shouldFitMermaidRef.current = false;
           const scroller = scrollRef.current;
           const nextZoom = clampZoom(Math.min(scroller.clientWidth / (width + 180), scroller.clientHeight / (height + 180), 1.35));
@@ -582,13 +703,13 @@ export function MermaidEditor() {
         }
       } catch (error) {
         if (cancelled) return;
-        setMermaidRenderError(error instanceof Error ? error.message : "Unable to render this Mermaid flowchart");
+        setMermaidRenderError(error instanceof Error ? error.message : "Unable to render this Mermaid diagram");
       }
     };
 
     void renderDiagram();
     return () => { cancelled = true; };
-  }, [activeMermaidVersion, diagram.edges, diagram.groups, diagram.nodes, selected, source, viewMode]);
+  }, [activeDiagramType.id, activeMermaidVersion, diagram.edges, diagram.groups, diagram.nodes, restoreViewAnchor, source, viewMode]);
 
   useEffect(() => {
     if (viewMode !== "mermaid" || !mermaidViewRef.current) return;
@@ -597,6 +718,28 @@ export function MermaidEditor() {
       element.classList.toggle("selected", Boolean(id && selected.includes(id)));
     });
   }, [mermaidSize, selected, viewMode]);
+
+  useEffect(() => {
+    if (viewMode !== "free" || pendingViewAnchorRef.current?.targetView !== "free") return;
+    const frame = requestAnimationFrame(() => restoreViewAnchor("free"));
+    return () => cancelAnimationFrame(frame);
+  }, [diagram.nodes, restoreViewAnchor, viewMode]);
+
+  useEffect(() => {
+    if (!shouldFitFreeformRef.current || viewMode !== "free" || !nativeFlowchart || !diagram.nodes.length || !scrollRef.current) return;
+    shouldFitFreeformRef.current = false;
+    const scroller = scrollRef.current;
+    const minX = Math.min(...diagram.nodes.map((node) => node.x)) - 90;
+    const minY = Math.min(...diagram.nodes.map((node) => node.y)) - 90;
+    const maxX = Math.max(...diagram.nodes.map((node) => node.x + node.width)) + 90;
+    const maxY = Math.max(...diagram.nodes.map((node) => node.y + node.height)) + 90;
+    const nextZoom = clampZoom(Math.min(scroller.clientWidth / (maxX - minX), scroller.clientHeight / (maxY - minY), 1.2));
+    setZoom(nextZoom);
+    requestAnimationFrame(() => {
+      scroller.scrollLeft = (CANVAS_MARGIN + (minX + maxX) / 2) * nextZoom - scroller.clientWidth / 2;
+      scroller.scrollTop = (CANVAS_MARGIN + (minY + maxY) / 2) * nextZoom - scroller.clientHeight / 2;
+    });
+  }, [diagram.nodes, nativeFlowchart, viewMode]);
 
   useEffect(() => {
     const scroller = scrollRef.current;
@@ -636,15 +779,37 @@ export function MermaidEditor() {
     if (save) commit(apply); else setDiagram(apply);
   };
 
-  const addNode = (shape: NodeShape = "rectangle") => {
+  const addNode = (shape: NodeShape = "rectangle", connectFromSelection = false) => {
+    const origin = connectFromSelection && selected.length === 1
+      ? diagram.nodes.find((node) => node.id === selected[0])
+      : undefined;
+    if (connectFromSelection && !origin) {
+      notify("Select one node before using Shift+N");
+      return;
+    }
+
     const idBase = "node";
     let count = diagram.nodes.length + 1;
     while (diagram.nodes.some((node) => node.id === `${idBase}${count}`)) count += 1;
     const id = `${idBase}${count}`;
-    const node: DiagramNode = { id, label: "New step", x: 455 + Math.random() * 80, y: 420 + Math.random() * 40, width: 150, height: 62, shape, color: "#fde8f1", textColor: "#24232a" };
-    commit((current) => ({ ...current, nodes: [...current.nodes, node] }));
+    const node: DiagramNode = {
+      id,
+      label: "New step",
+      x: origin ? origin.x + (diagram.direction === "LR" ? origin.width + 120 : 0) : 455 + Math.random() * 80,
+      y: origin ? origin.y + (diagram.direction === "TB" ? origin.height + 100 : 0) : 420 + Math.random() * 40,
+      width: 150,
+      height: 62,
+      shape,
+      color: "#ffffff",
+      textColor: "#24232a",
+    };
+    const edge: DiagramEdge | undefined = origin
+      ? { id: `e${edgeCounter.current++}`, from: origin.id, to: id, label: "", style: "solid" }
+      : undefined;
+    commit((current) => ({ ...current, nodes: [...current.nodes, node], edges: edge ? [...current.edges, edge] : current.edges }));
     setSelected([id]);
     setEditingNode(id);
+    if (edge) notify("Connected step created");
   };
 
   const deleteSelected = () => {
@@ -688,8 +853,11 @@ export function MermaidEditor() {
       }
       if (event.key === "Escape") {
         marqueeRef.current = null;
+        marqueeSurfaceRef.current = null;
         setMarquee(null);
         setSettingsOpen(false);
+        setShortcutsOpen(false);
+        setHelpOpen(false);
         setEditingNode(null);
         setEditingGroup(null);
         setConnectionStart(null);
@@ -698,12 +866,18 @@ export function MermaidEditor() {
       }
       if (editing || event.metaKey || event.ctrlKey || event.altKey || event.repeat) return;
 
+      if (!nativeFlowchart && ["n", "v", "l", "s", "d", "m"].includes(key)) {
+        event.preventDefault();
+        notify(`${visualModeName} diagrams use diagram-specific statement controls`);
+        return;
+      }
+
       if (event.key === "Backspace" || event.key === "Delete") {
         event.preventDefault();
         deleteSelected();
       } else if (key === "n") {
         event.preventDefault();
-        addNode();
+        addNode("rectangle", event.shiftKey);
       } else if (key === "v") {
         event.preventDefault();
         setTool("select");
@@ -721,7 +895,6 @@ export function MermaidEditor() {
         addNode("diamond");
       } else if (key === "m") {
         event.preventDefault();
-        setViewMode("free");
         setTool("marquee");
         setConnectionStart(null);
         notify("Drag across the canvas to select nodes");
@@ -742,8 +915,12 @@ export function MermaidEditor() {
   };
 
   const beginCanvasPointer = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (viewMode !== "free" || event.button !== 0 || tool === "connect" || !boardRef.current) return;
-    const rect = boardRef.current.getBoundingClientRect();
+    if (!nativeFlowchart || event.button !== 0 || tool === "connect") return;
+    if (viewMode === "mermaid" && tool !== "marquee") return;
+    const selectionSurface = viewMode === "mermaid" ? mermaidStageRef.current : boardRef.current;
+    if (!selectionSurface) return;
+    if (tool === "marquee") event.preventDefault();
+    const rect = selectionSurface.getBoundingClientRect();
     const startX = (event.clientX - rect.left) / zoom;
     const startY = (event.clientY - rect.top) / zoom;
     const next: MarqueeSelection = { startX, startY, currentX: startX, currentY: startY, additive: event.shiftKey };
@@ -752,8 +929,8 @@ export function MermaidEditor() {
     setEditingGroup(null);
     if (!event.shiftKey) setSelected([]);
     marqueeRef.current = next;
+    marqueeSurfaceRef.current = selectionSurface;
     setMarquee(next);
-    event.currentTarget.setPointerCapture(event.pointerId);
   };
 
   const beginDrag = (event: ReactPointerEvent, id: string) => {
@@ -801,6 +978,7 @@ export function MermaidEditor() {
   };
 
   const selectMermaidElement = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (tool === "marquee") return;
     const element = (event.target as Element).closest<HTMLElement>("[data-node-id], [data-edge-id], [data-group-id]");
     if (!element) {
       setSelected([]);
@@ -819,7 +997,7 @@ export function MermaidEditor() {
     setSelected(event.shiftKey ? (selected.includes(id) ? selected.filter((value) => value !== id) : [...selected, id]) : [id]);
   };
 
-  const editMermaidElement = (event: ReactPointerEvent<HTMLDivElement>) => {
+  const editMermaidElement = (event: React.MouseEvent<HTMLDivElement>) => {
     const element = (event.target as Element).closest<HTMLElement>("[data-node-id], [data-group-id]");
     const nodeId = element?.dataset.nodeId;
     const groupId = element?.dataset.groupId;
@@ -877,26 +1055,143 @@ export function MermaidEditor() {
   const exportSvg = async () => {
     const mermaid = await loadMermaid(activeMermaidVersion);
     mermaid.initialize({ startOnLoad: false, theme: "base", securityLevel: "strict", flowchart: { htmlLabels: true, curve: "basis" } });
-    const { svg } = await mermaid.render(`mermade-${Date.now()}`, source);
-    download(svg, `${diagram.name.toLowerCase().replace(/\W+/g, "-")}.svg`, "image/svg+xml");
+    const { svg } = await renderMermaidSvg(mermaid, `mermade-${Date.now()}`, source);
+    download(normalizeSvgMarkup(svg, activeDiagramType.id, source), `${diagram.name.toLowerCase().replace(/\W+/g, "-")}.svg`, "image/svg+xml");
     setExportOpen(false);
     notify("SVG exported");
   };
 
-  const applySource = () => {
-    const detection = detectMermaidVersion(sourceDraft);
+  const validateAndCommitSource = async (candidate: string) => {
+    const detection = detectMermaidVersion(candidate);
     if ((diagram.mermaidVersion || "auto") === "10.9.6" && detection.minimum === "11.3.0") {
-      notify("This source requires Mermaid 11.3+; choose Auto-detect or 11.16.0 in Settings");
+      return { ok: false, error: "This source requires Mermaid 11.3+; choose Auto-detect or 11.16.0 in Settings" };
+    }
+
+    try {
+      const version = (diagram.mermaidVersion || "auto") === "auto" ? detection.recommended : activeMermaidVersion;
+      const mermaid = await loadMermaid(version);
+      mermaid.initialize({ startOnLoad: false, securityLevel: "strict" });
+      await mermaid.parse(candidate);
+      const detectedType = detectDiagramType(candidate);
+      if (!detectedType) return { ok: false, error: "This Mermaid diagram type is not registered in Mermade" };
+
+      const parsedFlowchart = detectedType.id === "flowchart" ? parseMermaid(candidate, diagram) : null;
+      if (parsedFlowchart) shouldFitFreeformRef.current = true;
+      commit((current) => parsedFlowchart ? {
+        ...parsedFlowchart,
+        name: current.name,
+        source: undefined,
+        detectedMermaidVersion: detection.recommended,
+      } : {
+        ...current,
+        source: candidate,
+        nodes: [],
+        edges: [],
+        groups: [],
+        detectedMermaidVersion: detection.recommended,
+      });
+      setSelected([]);
+      shouldFitMermaidRef.current = true;
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : "Mermaid rejected this source" };
+    }
+  };
+
+  const applySource = async () => {
+    const result = await validateAndCommitSource(sourceDraft);
+    if (!result.ok) {
+      notify(result.error || "Mermaid rejected this source");
       return;
     }
-    const parsed = parseMermaid(sourceDraft, diagram);
-    if (!parsed) {
-      notify("Could not find a valid flowchart in this source");
-      return;
-    }
-    commit(() => ({ ...parsed, detectedMermaidVersion: detection.recommended }));
     setSourceDirty(false);
-    notify("Canvas updated from Mermaid source");
+    notify("Diagram updated from valid Mermaid source");
+  };
+
+  const importDiagram = async (event: ReactChangeEvent<HTMLInputElement>) => {
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    input.value = "";
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) {
+      notify("Choose a Mermaid file smaller than 5 MB");
+      return;
+    }
+
+    try {
+      const imported = readImportedMermaid(await file.text());
+      if (!imported.source) {
+        notify(`${file.name} does not contain Mermaid source`);
+        return;
+      }
+      const result = await validateAndCommitSource(imported.source);
+      if (!result.ok) {
+        notify(`Could not import ${file.name}: ${result.error || "invalid Mermaid source"}`);
+        return;
+      }
+
+      setDiagram((current) => ({ ...current, name: diagramNameFromFile(file.name) }));
+      setSourceDraft(imported.source);
+      setSourceDirty(false);
+      setSourceOpen(false);
+      setExportOpen(false);
+      setViewMode("mermaid");
+      notify(imported.additionalDiagramCount
+        ? `Imported ${file.name}; using the first Mermaid diagram`
+        : `Imported ${file.name}`);
+    } catch {
+      notify(`Could not read ${file.name}`);
+    }
+  };
+
+  const changeDiagramType = async (nextTypeId: string) => {
+    const nextType = MERMAID_DIAGRAM_TYPES.find((type) => type.id === nextTypeId);
+    if (!nextType || nextType.id === activeDiagramType.id) return;
+
+    const result = await validateAndCommitSource(nextType.template);
+    if (!result.ok) {
+      notify(result.error || `Mermaid could not create the ${nextType.label}`);
+      return;
+    }
+    setSourceDraft(nextType.template);
+    setSourceDirty(false);
+    setViewMode("mermaid");
+    notify(`${nextType.label} starter created`);
+  };
+
+  const switchCanvasView = (targetView: "free" | "mermaid") => {
+    if (targetView === viewMode) return;
+    const scroller = scrollRef.current;
+    const root = viewMode === "free" ? boardRef.current : mermaidViewRef.current;
+    if (scroller && root) {
+      const scrollerRect = scroller.getBoundingClientRect();
+      const candidates = [...root.querySelectorAll<HTMLElement>("[data-node-id]")];
+      const selectedId = selected.find((id) => candidates.some((candidate) => candidate.dataset.nodeId === id));
+      const viewportCenterX = scrollerRect.left + scrollerRect.width / 2;
+      const viewportCenterY = scrollerRect.top + scrollerRect.height / 2;
+      const anchor = selectedId
+        ? candidates.find((candidate) => candidate.dataset.nodeId === selectedId)
+        : candidates.sort((first, second) => {
+          const firstRect = first.getBoundingClientRect();
+          const secondRect = second.getBoundingClientRect();
+          const firstDistance = Math.hypot(firstRect.left + firstRect.width / 2 - viewportCenterX, firstRect.top + firstRect.height / 2 - viewportCenterY);
+          const secondDistance = Math.hypot(secondRect.left + secondRect.width / 2 - viewportCenterX, secondRect.top + secondRect.height / 2 - viewportCenterY);
+          return firstDistance - secondDistance;
+        })[0];
+
+      if (anchor?.dataset.nodeId) {
+        const anchorRect = anchor.getBoundingClientRect();
+        pendingViewAnchorRef.current = {
+          nodeId: anchor.dataset.nodeId,
+          viewportX: (anchorRect.left + anchorRect.width / 2 - scrollerRect.left) / scrollerRect.width,
+          viewportY: (anchorRect.top + anchorRect.height / 2 - scrollerRect.top) / scrollerRect.height,
+          targetView,
+        };
+      }
+    }
+    if (targetView === "mermaid") shouldFitMermaidRef.current = false;
+    if (targetView === "free") shouldFitFreeformRef.current = false;
+    setViewMode(targetView);
   };
 
   const zoomAtViewportCenter = (nextValue: number) => {
@@ -913,6 +1208,17 @@ export function MermaidEditor() {
       scroller.scrollLeft = centerX * nextZoom - scroller.clientWidth / 2;
       scroller.scrollTop = centerY * nextZoom - scroller.clientHeight / 2;
     });
+  };
+
+  const organizeFlowchart = () => {
+    if (!nativeFlowchart || !diagram.nodes.length) return;
+    const positions = layoutFlowchart(diagram.nodes, diagram.edges, diagram.direction);
+    shouldFitFreeformRef.current = true;
+    commit((current) => ({
+      ...current,
+      nodes: current.nodes.map((node) => ({ ...node, ...positions.get(node.id) })),
+    }));
+    notify("Flowchart organized from its relationships");
   };
 
   const fitView = () => {
@@ -962,6 +1268,8 @@ export function MermaidEditor() {
             <IconButton label="Undo" onClick={undo}><Undo2 size={17} /></IconButton>
             <IconButton label="Redo" onClick={redo}><Redo2 size={17} /></IconButton>
           </div>
+          <input ref={importInputRef} type="file" accept={MERMAID_IMPORT_ACCEPT} hidden onChange={(event) => void importDiagram(event)} />
+          <button className="secondary-button" type="button" onClick={() => importInputRef.current?.click()}><Upload size={16} /> Import</button>
           <button className="secondary-button" type="button" onClick={() => { setSourceOpen(true); setSourceDraft(source); setSourceDirty(false); }}><Code2 size={16} /> Source</button>
           <div className="export-wrap">
             <button className="primary-button" type="button" onClick={() => setExportOpen((open) => !open)}><Download size={16} /> Export <ChevronDown size={14} /></button>
@@ -979,36 +1287,67 @@ export function MermaidEditor() {
       <section className="workspace">
         <aside className={`tool-rail ${preferences.showShortcutHints ? "" : "hide-shortcuts"}`} aria-label="Canvas tools">
           <div className="tool-group">
-            <IconButton label="Select (V)" shortcut="V" active={tool === "select"} onClick={() => { setTool("select"); setConnectionStart(null); }}><MousePointer2 size={19} /></IconButton>
-            <IconButton label="Marquee select (M)" shortcut="M" active={tool === "marquee"} onClick={() => { setViewMode("free"); setTool("marquee"); setConnectionStart(null); }}><BoxSelect size={19} /></IconButton>
-            <IconButton label="Add node (N)" shortcut="N" onClick={() => addNode()}><Plus size={20} /></IconButton>
-            <IconButton label="Link nodes (L)" shortcut="L" active={tool === "connect"} onClick={() => { setTool("connect"); setConnectionStart(null); notify("Choose the first node"); }}><Link2 size={19} /></IconButton>
-            <IconButton label="Create subgraph (S)" shortcut="S" onClick={groupSelected}><Group size={19} /></IconButton>
+            <IconButton label="Select (V)" shortcut="V" disabled={!nativeFlowchart} active={nativeFlowchart && tool === "select"} onClick={() => { setTool("select"); setConnectionStart(null); }}><MousePointer2 size={19} /></IconButton>
+            <IconButton label="Marquee select (M)" shortcut="M" disabled={!nativeFlowchart} active={nativeFlowchart && tool === "marquee"} onClick={() => { setTool("marquee"); setConnectionStart(null); }}><BoxSelect size={19} /></IconButton>
+            <IconButton label="Add node (N)" shortcut="N" disabled={!nativeFlowchart} onClick={() => addNode()}><Plus size={20} /></IconButton>
+            <IconButton label="Link nodes (L)" shortcut="L" disabled={!nativeFlowchart} active={nativeFlowchart && tool === "connect"} onClick={() => { setTool("connect"); setConnectionStart(null); notify("Choose the first node"); }}><Link2 size={19} /></IconButton>
+            <IconButton label="Create subgraph (S)" shortcut="S" disabled={!nativeFlowchart} onClick={groupSelected}><Group size={19} /></IconButton>
           </div>
           <div className="tool-separator" />
           <div className="tool-group">
-            <IconButton label="Add decision (D)" shortcut="D" onClick={() => addNode("diamond")}><CircleDot size={19} /></IconButton>
-            <IconButton label="Frame selection" onClick={fitView}><Frame size={19} /></IconButton>
+            <IconButton label="Add decision (D)" shortcut="D" disabled={!nativeFlowchart} onClick={() => addNode("diamond")}><CircleDot size={19} /></IconButton>
+            <IconButton label="Fit chart" onClick={fitView}><Maximize2 size={19} /></IconButton>
+            <IconButton label="Organize flowchart" disabled={!nativeFlowchart} onClick={organizeFlowchart}><Workflow size={19} /></IconButton>
           </div>
           <div className="rail-spacer" />
-          <IconButton label="Settings" active={settingsOpen} onClick={() => setSettingsOpen(true)}><Settings2 size={19} /></IconButton>
+          <IconButton label={`${activeDiagramType.label} help`} active={helpOpen} onClick={() => { setHelpOpen((open) => !open); setShortcutsOpen(false); setSettingsOpen(false); }}><CircleHelp size={19} /></IconButton>
+          <IconButton label="Keyboard shortcuts" active={shortcutsOpen} onClick={() => { setShortcutsOpen((open) => !open); setSettingsOpen(false); setHelpOpen(false); }}><Command size={19} /></IconButton>
+          <IconButton label="Settings" active={settingsOpen} onClick={() => { setSettingsOpen(true); setShortcutsOpen(false); setHelpOpen(false); }}><Settings2 size={19} /></IconButton>
         </aside>
 
         <section className={`canvas-viewport ${tool === "connect" ? "is-connecting" : ""} ${tool === "marquee" ? "is-marquee" : ""}`}>
           <div className="canvas-titlebar">
-            <div><span className="canvas-kicker">Flowchart</span><b>{diagram.name}</b></div>
+            <div ref={typeMenuRef} className={`diagram-type-picker ${typeMenuOpen ? "open" : ""}`} onPointerDown={(event) => event.stopPropagation()}>
+              <button
+                className="diagram-type-trigger"
+                type="button"
+                aria-label="Diagram type"
+                aria-haspopup="listbox"
+                aria-expanded={typeMenuOpen}
+                onClick={() => setTypeMenuOpen((open) => !open)}
+              >
+                <span>{activeDiagramType.label}</span><ChevronDown size={13} />
+              </button>
+              {typeMenuOpen && <div className="diagram-type-menu" role="listbox" aria-label="Choose diagram type">
+                {(["freeform", "structured", "data"] as const).map((family) => <div key={family} className="diagram-type-group" role="group" aria-label={`${visualModeLabel(family)} diagrams`}>
+                  <span>{visualModeLabel(family)}</span>
+                  {MERMAID_DIAGRAM_TYPES.filter((type) => type.family === family).map((type) => <button
+                    key={type.id}
+                    type="button"
+                    role="option"
+                    aria-selected={type.id === activeDiagramType.id}
+                    className={type.id === activeDiagramType.id ? "selected" : ""}
+                    onClick={() => { setTypeMenuOpen(false); void changeDiagramType(type.id); }}
+                  >
+                    {type.label}{type.id === activeDiagramType.id && <Check size={13} />}
+                  </button>)}
+                </div>)}
+              </div>}
+            </div>
             <div className="canvas-view-controls" onPointerDown={(event) => event.stopPropagation()}>
-              <div className="direction-switch" aria-label="Chart direction">
+              {nativeFlowchart && <div className="direction-switch" aria-label="Chart direction">
                 <button className={diagram.direction === "LR" ? "active" : ""} type="button" onClick={(event) => { event.stopPropagation(); commit((current) => ({ ...current, direction: "LR" })); }}>Left → right</button>
                 <button className={diagram.direction === "TB" ? "active" : ""} type="button" onClick={(event) => { event.stopPropagation(); commit((current) => ({ ...current, direction: "TB" })); }}>Top ↓ bottom</button>
-              </div>
+              </div>}
               <div className="view-switch" aria-label="Canvas view">
-                <button className={viewMode === "free" ? "active" : ""} type="button" onClick={(event) => { event.stopPropagation(); setViewMode("free"); }}><MousePointer2 size={12} /> Freeform</button>
-                <button className={viewMode === "mermaid" ? "active" : ""} type="button" onClick={(event) => { event.stopPropagation(); shouldFitMermaidRef.current = true; setViewMode("mermaid"); }}><Sparkles size={12} /> Mermaid</button>
+                <button className={viewMode === "free" ? "active" : ""} type="button" onClick={(event) => { event.stopPropagation(); switchCanvasView("free"); }}><MousePointer2 size={12} /> {visualModeName}</button>
+                <button className={viewMode === "mermaid" ? "active" : ""} type="button" onClick={(event) => { event.stopPropagation(); switchCanvasView("mermaid"); }}><Sparkles size={12} /> Mermaid</button>
               </div>
             </div>
           </div>
-          <div ref={scrollRef} className="canvas-scroll">
+          {viewMode === "free" && !nativeFlowchart ? (
+            <SemanticVisualEditor key={`${activeDiagramType.id}:${source}`} source={source} type={activeDiagramType} onCommit={validateAndCommitSource} />
+          ) : <div ref={scrollRef} className="canvas-scroll">
             <div
               className={`diagram-surface ${preferences.showGrid ? "" : "hide-grid"}`}
               onPointerDown={beginCanvasPointer}
@@ -1048,7 +1387,8 @@ export function MermaidEditor() {
               {diagram.nodes.map((node) => (
                 <div
                   key={node.id}
-                  className={`diagram-node shape-${node.shape} ${selected.includes(node.id) ? "selected" : ""} ${connectionStart === node.id ? "connection-start" : ""}`}
+                  data-node-id={node.id}
+                  className={`diagram-node shape-${node.shape} ${mermaidShapeClass(node.mermaidShape)} ${selected.includes(node.id) ? "selected" : ""} ${connectionStart === node.id ? "connection-start" : ""}`}
                   style={{ left: node.x, top: node.y, width: node.width, height: node.height, "--node-color": node.color, "--node-text": node.textColor } as React.CSSProperties}
                   onPointerDown={(event) => beginDrag(event, node.id)}
                   onPointerUp={(event) => selectNode(event, node.id)}
@@ -1085,17 +1425,29 @@ export function MermaidEditor() {
             </div>
             ) : (
               <div
+                ref={mermaidStageRef}
                 className="mermaid-stage"
                 style={{ left: CANVAS_MARGIN * zoom, top: CANVAS_MARGIN * zoom, width: mermaidSize.width, height: mermaidSize.height, transform: `scale(${zoom})` }}
                 onPointerDown={selectMermaidElement}
                 onDoubleClick={editMermaidElement}
               >
                 <div ref={mermaidViewRef} className="mermaid-render" />
+                {marquee && (
+                  <div
+                    className="marquee-selection"
+                    style={{
+                      left: Math.min(marquee.startX, marquee.currentX),
+                      top: Math.min(marquee.startY, marquee.currentY),
+                      width: Math.abs(marquee.currentX - marquee.startX),
+                      height: Math.abs(marquee.currentY - marquee.startY),
+                    }}
+                  />
+                )}
                 {mermaidRenderError && <div className="mermaid-render-error"><Code2 size={20} /><b>Mermaid could not render this diagram</b><span>{mermaidRenderError}</span></div>}
               </div>
             )}
             </div>
-          </div>
+          </div>}
 
           {viewMode === "mermaid" && editingNode && selectedNode && (
             <div className="mermaid-inline-editor">
@@ -1125,16 +1477,16 @@ export function MermaidEditor() {
             </div>
           )}
 
-          <div className="canvas-hint"><BoxSelect size={15} /> Click to select · Double-click to edit · Scroll to pan · ⌘ scroll to zoom</div>
+          {(viewMode === "mermaid" || nativeFlowchart) && <><div className="canvas-hint"><BoxSelect size={15} /> Click to select · Double-click to edit · Scroll to pan · ⌘ scroll to zoom</div>
           <div className="zoom-controls">
             <IconButton label="Zoom out" onClick={() => zoomAtViewportCenter(zoom - 0.1)}><ZoomOut size={17} /></IconButton>
             <button type="button" onClick={fitView}>{Math.round(zoom * 100)}%</button>
             <IconButton label="Zoom in" onClick={() => zoomAtViewportCenter(zoom + 0.1)}><ZoomIn size={17} /></IconButton>
             <span />
             <IconButton label="Fit to canvas" onClick={fitView}><Maximize2 size={17} /></IconButton>
-          </div>
-          {tool === "connect" && <div className="mode-banner"><Link2 size={15} /> {connectionStart ? "Now choose a destination" : "Choose a starting node"}</div>}
-          {tool === "marquee" && <div className="mode-banner"><BoxSelect size={15} /> Drag across nodes · Shift-drag to add</div>}
+          </div></>}
+          {nativeFlowchart && tool === "connect" && <div className="mode-banner"><Link2 size={15} /> {connectionStart ? "Now choose a destination" : "Choose a starting node"}</div>}
+          {nativeFlowchart && tool === "marquee" && <div className="mode-banner"><BoxSelect size={15} /> Drag across nodes · Shift-drag to add</div>}
         </section>
 
         <aside className="inspector">
@@ -1146,7 +1498,7 @@ export function MermaidEditor() {
             {selectedNode ? (
               <>
                 <div className="selection-heading">
-                  <div className={`mini-shape shape-${selectedNode.shape}`} style={{ "--node-color": selectedNode.color } as React.CSSProperties} />
+                  <div className={`mini-shape shape-${selectedNode.shape} ${mermaidShapeClass(selectedNode.mermaidShape)}`} style={{ "--node-color": selectedNode.color } as React.CSSProperties} />
                   <div><span>Node</span><b>{selectedNode.label}</b></div>
                   <IconButton label="Delete node" onClick={deleteSelected}><Trash2 size={16} /></IconButton>
                 </div>
@@ -1154,7 +1506,11 @@ export function MermaidEditor() {
                   <div className="field-stack">
                     <label><span>Text</span><textarea value={selectedNode.label} onFocus={checkpoint} onChange={(event) => updateNode(selectedNode.id, { label: event.target.value }, false)} rows={3} /></label>
                     <label><span>Node ID</span><div className="input-with-prefix"><Code2 size={14} /><input value={selectedNode.id} readOnly /></div></label>
-                    <label><span>Shape</span><select value={selectedNode.shape} onChange={(event) => updateNode(selectedNode.id, { shape: event.target.value as NodeShape, mermaidShape: undefined })}><option value="rectangle">Rectangle</option><option value="rounded">Rounded / stadium</option><option value="diamond">Decision</option><option value="circle">Circle</option><option value="hexagon">Hexagon</option><option value="document">Document</option><option value="framed">Framed rectangle</option></select></label>
+                    <label><span>Shape</span><select value={selectedFlowchartShape(selectedNode)} onChange={(event) => updateNode(selectedNode.id, flowchartShapePatch(event.target.value))}>
+                      {FLOWCHART_SHAPE_GROUPS.map((group) => <optgroup key={group.label} label={group.label}>
+                        {group.options.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+                      </optgroup>)}
+                    </select></label>
                     <div className="property-row"><span>Subgraph</span><b>{diagram.groups.find((group) => group.id === selectedNode.groupId)?.label || "None"}</b></div>
                     <button className="wide-action" type="button" onClick={() => { setTool("connect"); setConnectionStart(selectedNode.id); notify("Choose a destination node"); }}><Link2 size={16} /> Add relationship from this node</button>
                   </div>
@@ -1193,15 +1549,99 @@ export function MermaidEditor() {
             ) : (
               <div className="empty-inspector">
                 <div className="empty-orbit"><MousePointer2 size={22} /></div>
-                <h3>Select something</h3>
-                <p>Choose a node or relationship to edit its content and appearance.</p>
-                <button className="wide-action" type="button" onClick={() => addNode()}><Plus size={16} /> Add your first node</button>
+                <h3>{nativeFlowchart ? "Select something" : activeDiagramType.label}</h3>
+                <p>{nativeFlowchart ? "Choose a node or relationship to edit its content and appearance." : `${visualModeName} editing preserves the diagram's Mermaid-specific structure.`}</p>
+                {nativeFlowchart
+                  ? <button className="wide-action" type="button" onClick={() => addNode()}><Plus size={16} /> Add your first node</button>
+                  : <button className="wide-action" type="button" onClick={() => { setSourceOpen(true); setSourceDraft(source); setSourceDirty(false); }}><Code2 size={16} /> Edit Mermaid source</button>}
               </div>
             )}
           </div>
-          <footer className="inspector-footer"><Sparkles size={14} /><span>Valid Mermaid flowchart</span><span className="status-dot" /></footer>
+          <footer className="inspector-footer"><Sparkles size={14} /><span>Valid Mermaid {activeDiagramType.label}</span><span className="status-dot" /></footer>
         </aside>
       </section>
+
+      {helpOpen && (
+        <div className="settings-backdrop" onPointerDown={() => setHelpOpen(false)}>
+          <section className="help-panel" role="dialog" aria-modal="true" aria-labelledby="help-title" onPointerDown={(event) => event.stopPropagation()}>
+            <header>
+              <div><CircleHelp size={19} /><span><b id="help-title">{activeDiagramType.label} help</b><small>{visualModeName} editing · Mermaid {activeMermaidVersion}</small></span></div>
+              <button type="button" onClick={() => setHelpOpen(false)}>Done</button>
+            </header>
+            <div className="help-content">
+              <section className="help-section help-intro">
+                <span>When to use it</span>
+                <p>{activeHelp.purpose}</p>
+              </section>
+              <section className="help-section">
+                <span>Editing in Mermade</span>
+                <p>{visualEditingHelp}</p>
+              </section>
+              <section className="help-section help-quick-start">
+                <span>Quick start</span>
+                <pre><code>{activeDiagramType.template}</code></pre>
+              </section>
+              <div className="help-guidance-grid">
+                <section className="help-section">
+                  <span>Good practice</span>
+                  <ul>{activeHelp.tips.map((tip) => <li key={tip}>{tip}</li>)}</ul>
+                </section>
+                <section className="help-section">
+                  <span>Watch for</span>
+                  <ul>{activeHelp.pitfalls.map((pitfall) => <li key={pitfall}>{pitfall}</li>)}</ul>
+                </section>
+              </div>
+              <section className="help-section">
+                <span>References</span>
+                <div className="help-resources">
+                  {activeHelp.resources.map((resource) => (
+                    <a key={resource.url} href={resource.url} target="_blank" rel="noreferrer">
+                      <span><small>{resource.kind}</small><b>{resource.label}</b></span><ExternalLink size={15} />
+                    </a>
+                  ))}
+                </div>
+                <p className="help-reference-note">Standards are labelled separately from best-practice and method guidance.</p>
+              </section>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {shortcutsOpen && (
+        <div className="settings-backdrop" onPointerDown={() => setShortcutsOpen(false)}>
+          <section className="shortcuts-panel" role="dialog" aria-modal="true" aria-labelledby="shortcuts-title" onPointerDown={(event) => event.stopPropagation()}>
+            <header>
+              <div><Command size={19} /><span><b id="shortcuts-title">Keyboard shortcuts</b><small>Move faster around the canvas</small></span></div>
+              <button type="button" onClick={() => setShortcutsOpen(false)}>Done</button>
+            </header>
+            <div className="shortcuts-content">
+              <div className="shortcuts-section">
+                <span>Canvas tools</span>
+                <div className="shortcuts-list">
+                  <div><b>Select</b><kbd>V</kbd></div>
+                  <div><b>Marquee select</b><kbd>M</kbd></div>
+                  <div><b>New node</b><kbd>N</kbd></div>
+                  <div><b>New connected node</b><span><kbd>⇧</kbd><kbd>N</kbd></span></div>
+                  <div><b>Link nodes</b><kbd>L</kbd></div>
+                  <div><b>Create subgraph</b><kbd>S</kbd></div>
+                  <div><b>Add decision</b><kbd>D</kbd></div>
+                </div>
+              </div>
+              <div className="shortcuts-section">
+                <span>Edit and navigate</span>
+                <div className="shortcuts-list">
+                  <div><b>Delete selection</b><kbd>⌫</kbd></div>
+                  <div><b>Cancel or close</b><kbd>Esc</kbd></div>
+                  <div><b>Undo</b><span><kbd>⌘</kbd><kbd>Z</kbd></span></div>
+                  <div><b>Redo</b><span><kbd>⌘</kbd><kbd>⇧</kbd><kbd>Z</kbd></span></div>
+                  <div><b>Pan canvas</b><kbd>Scroll</kbd></div>
+                  <div><b>Zoom canvas</b><span><kbd>⌘</kbd><kbd>Scroll</kbd></span></div>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+      )}
 
       {settingsOpen && (
         <div className="settings-backdrop" onPointerDown={() => setSettingsOpen(false)}>

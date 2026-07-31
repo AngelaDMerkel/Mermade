@@ -33,13 +33,23 @@ test("server-renders the local Mermaid editor", async () => {
   assert.match(html, /Saved locally/);
   assert.match(html, /aria-label="Canvas tools"/);
   assert.match(html, /aria-label="Canvas view"/);
-  assert.match(html, /Freeform<\/button>/);
+  assert.match(html, /> Import<\/button>[\s\S]*?> Source<\/button>[\s\S]*?> Export/);
+  assert.match(html, /FreeForm<\/button>/);
   assert.match(html, /Mermaid<\/button>/);
   assert.match(
     html,
-    /aria-label="Canvas view"[\s\S]*?<button class=""[^>]*>[\s\S]*?Freeform<\/button>[\s\S]*?<button class="active"[^>]*>[\s\S]*?Mermaid<\/button>/,
+    /aria-label="Canvas view"[\s\S]*?<button class=""[^>]*>[\s\S]*?FreeForm<\/button>[\s\S]*?<button class="active"[^>]*>[\s\S]*?Mermaid<\/button>/,
   );
   assert.doesNotMatch(html, /codex-preview|chatgpt\.site|Sign in required/i);
+});
+
+test("imports local Mermaid and Markdown files through validated source", async () => {
+  const editor = await readFile(new URL("../app/mermaid-editor.tsx", import.meta.url), "utf8");
+
+  assert.match(editor, /accept=\{MERMAID_IMPORT_ACCEPT\}/);
+  assert.match(editor, /readImportedMermaid\(await file\.text\(\)\)/);
+  assert.match(editor, /validateAndCommitSource\(imported\.source\)/);
+  assert.match(editor, /setViewMode\("mermaid"\)/);
 });
 
 test("renders discoverable toolbar shortcuts", async () => {
@@ -62,7 +72,117 @@ test("renders discoverable toolbar shortcuts", async () => {
 
   assert.match(html, /Click to select · Double-click to edit · Scroll to pan · ⌘ scroll to zoom/);
   assert.match(html, /aria-label="Settings"/);
+  assert.match(html, /aria-label="Flowchart help"/);
+  assert.match(html, /aria-label="Keyboard shortcuts"/);
+  assert.match(html, /aria-label="Flowchart help"[\s\S]*?aria-label="Keyboard shortcuts"[\s\S]*?aria-label="Settings"/);
+  assert.match(html, /aria-label="Fit chart"/);
+  assert.doesNotMatch(html, /aria-label="Frame selection"/);
   assert.doesNotMatch(html, /> Share<\/button>/);
+});
+
+test("provides dynamic diagram help with external guidance", async () => {
+  const editor = await readFile(new URL("../app/mermaid-editor.tsx", import.meta.url), "utf8");
+
+  assert.match(editor, /helpForDiagram\(activeDiagramType\.id\)/);
+  assert.match(editor, /id="help-title">\{activeDiagramType\.label\} help/);
+  assert.match(editor, /\{activeDiagramType\.template\}/);
+  assert.match(editor, />Good practice</);
+  assert.match(editor, />Watch for</);
+  assert.match(editor, />References</);
+  assert.match(editor, /target="_blank" rel="noreferrer"/);
+});
+
+test("provides a complete keyboard-shortcuts reference", async () => {
+  const editor = await readFile(new URL("../app/mermaid-editor.tsx", import.meta.url), "utf8");
+
+  for (const label of ["Select", "Marquee select", "New node", "New connected node", "Link nodes", "Create subgraph", "Add decision", "Delete selection", "Undo", "Redo", "Pan canvas", "Zoom canvas"]) {
+    assert.match(editor, new RegExp(`>${label}<`));
+  }
+  assert.match(editor, /<kbd>⇧<\/kbd><kbd>N<\/kbd>/);
+  assert.match(editor, /id="shortcuts-title">Keyboard shortcuts/);
+});
+
+test("keeps the diagram type picker clickable and compact", async () => {
+  const css = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  assert.match(css, /\.canvas-titlebar > div:first-child \{[^}]*pointer-events: auto;/);
+  assert.match(css, /\.diagram-type-trigger \{[^}]*gap: 3px;/);
+  assert.match(css, /\.diagram-type-group button \{[^}]*min-height: 27px;/);
+});
+
+test("supports visible marquee selection in Mermaid view", async () => {
+  const [editor, css] = await Promise.all([
+    readFile(new URL("../app/mermaid-editor.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(editor, /ref=\{mermaidStageRef\}/);
+  assert.match(editor, /selectionSurface\.querySelectorAll<HTMLElement>\("\[data-node-id\]"\)/);
+  assert.doesNotMatch(editor, /label="Marquee select \(M\)"[^\n]+setViewMode\("free"\)/);
+  assert.match(editor, /if \(tool === "marquee"\) event\.preventDefault\(\);/);
+  assert.match(css, /\.canvas-viewport\.is-marquee, \.canvas-viewport\.is-marquee \* \{[^}]*user-select: none !important;/);
+  assert.match(css, /\.mermaid-render \[data-node-id\]\.selected \{[^}]*drop-shadow\(0 3px 5px rgb\(224 9 95 \/ 22%\)\)/);
+  assert.doesNotMatch(css, /\.mermaid-render \[data-node-id\]\.selected \{[^}]*drop-shadow\(0 0/);
+  assert.match(css, /stroke-width: 3px !important/);
+});
+
+test("keeps rendered Mermaid nodes stable between click and double-click", async () => {
+  const editor = await readFile(new URL("../app/mermaid-editor.tsx", import.meta.url), "utf8");
+
+  assert.match(editor, /onDoubleClick=\{editMermaidElement\}/);
+  assert.match(editor, /setEditingNode\(nodeId\)/);
+  assert.match(editor, /viewMode === "mermaid" && editingNode && selectedNode/);
+  assert.match(editor, /\}, \[activeDiagramType\.id, activeMermaidVersion, diagram\.edges, diagram\.groups, diagram\.nodes, restoreViewAnchor, source, viewMode\]\);/);
+  assert.doesNotMatch(editor, /diagram\.nodes, selected, source, viewMode/);
+});
+
+test("anchors canvas view switches to the same logical node", async () => {
+  const editor = await readFile(new URL("../app/mermaid-editor.tsx", import.meta.url), "utf8");
+
+  assert.match(editor, /type PendingViewAnchor/);
+  assert.match(editor, /pendingViewAnchorRef/);
+  assert.match(editor, /switchCanvasView\("free"\)/);
+  assert.match(editor, /switchCanvasView\("mermaid"\)/);
+  assert.match(editor, /restoreViewAnchor\("mermaid"\)/);
+  assert.match(editor, /restoreViewAnchor\("free"\)/);
+  assert.match(editor, /data-node-id=\{node\.id\}/);
+});
+
+test("creates white nodes and supports the connected Shift+N shortcut", async () => {
+  const editor = await readFile(new URL("../app/mermaid-editor.tsx", import.meta.url), "utf8");
+
+  assert.match(editor, /label: "New step",[\s\S]*?color: "#ffffff"/);
+  assert.match(editor, /from: origin\.id, to: id/);
+  assert.match(editor, /addNode\("rectangle", event\.shiftKey\)/);
+  assert.match(editor, /Select one node before using Shift\+N/);
+});
+
+test("auto-organizes pasted flowcharts from their relationships", async () => {
+  const editor = await readFile(new URL("../app/mermaid-editor.tsx", import.meta.url), "utf8");
+
+  assert.match(editor, /layoutFlowchart\(parsedNodes, edges, direction\)/);
+  assert.match(editor, /label="Organize flowchart"/);
+  assert.match(editor, /shouldFitFreeformRef\.current = true/);
+});
+
+test("offers best-practice flowchart shapes before the complete Mermaid catalog", async () => {
+  const editor = await readFile(new URL("../app/mermaid-editor.tsx", import.meta.url), "utf8");
+
+  assert.match(editor, /FLOWCHART_SHAPE_GROUPS\.map/);
+  assert.match(editor, /selectedFlowchartShape\(selectedNode\)/);
+  assert.match(editor, /flowchartShapePatch\(event\.target\.value\)/);
+});
+
+test("normalizes specialized Mermaid SVG rendering without changing source", async () => {
+  const [editor, rendering] = await Promise.all([
+    readFile(new URL("../app/mermaid-editor.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/mermaid-rendering.ts", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(rendering, /svg\.setAttribute\("preserveAspectRatio", "xMidYMid meet"\)/);
+  assert.match(rendering, /diagramTypeId === "c4"/);
+  assert.match(rendering, /viewBox\.x \+ viewBox\.width \/ 2/);
+  assert.match(rendering, /title\.setAttribute\("text-anchor", "middle"\)/);
+  assert.match(editor, /normalizeSvgMarkup\(svg, activeDiagramType\.id, source\)/);
 });
 
 test("ships the approved Mermaid-pink brand assets", async () => {
