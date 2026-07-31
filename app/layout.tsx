@@ -5,7 +5,7 @@ const repository = process.env.GITHUB_REPOSITORY?.split("/");
 const socialBaseUrl = process.env.NEXT_PUBLIC_SITE_URL || (
   process.env.GITHUB_ACTIONS === "true" && repository?.length === 2
     ? `https://${repository[0]}.github.io/${repository[1]}/`
-    : "http://localhost:3000"
+    : "https://mermade-visual-editor.colinduffy.chatgpt.site"
 );
 
 export const metadata: Metadata = {
