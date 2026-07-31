@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
+  <title id="title">Mermade — Visual Mermaid Editor</title>
+  <desc id="desc">The Mermade connected M logo and wordmark on a subtle flowchart canvas.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FFFDFA"/>
+      <stop offset="1" stop-color="#FDE8F1"/>
+    </linearGradient>
+    <pattern id="grid" width="34" height="34" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1.6" fill="#E7D8DF"/>
+    </pattern>
+  </defs>
+  <rect width="1200" height="630" fill="url(#background)"/>
+  <rect width="1200" height="630" fill="url(#grid)" opacity=".58"/>
+  <g transform="translate(112 178) scale(1.45)">
+    <path d="M28 160V28L94 96L160 28V160" fill="none" stroke="#E0095F" stroke-width="13" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="12" y="144" width="32" height="32" rx="4" fill="#FFFDFA" stroke="#E0095F" stroke-width="6"/>
+    <rect x="6" y="14" width="44" height="28" rx="14" fill="#FFFDFA" stroke="#E0095F" stroke-width="6"/>
+    <path d="M94 78 112 96 94 114 76 96Z" fill="#FFFDFA" stroke="#E0095F" stroke-width="6" stroke-linejoin="round"/>
+    <circle cx="160" cy="28" r="16" fill="#FFFDFA" stroke="#E0095F" stroke-width="6"/>
+    <path d="m160 142 18 9v18l-18 9-18-9v-18Z" fill="#FFFDFA" stroke="#E0095F" stroke-width="6" stroke-linejoin="round"/>
+  </g>
+  <text x="475" y="302" fill="#24232A" font-family="Inter, Arial, sans-serif" font-size="102" font-weight="600" letter-spacing="-4">Mermade</text>
+  <text x="480" y="365" fill="#7B7883" font-family="Inter, Arial, sans-serif" font-size="29" font-weight="500" letter-spacing="4">VISUAL MERMAID EDITOR</text>
+</svg>

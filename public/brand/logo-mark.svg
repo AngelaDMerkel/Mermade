@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 188 188" role="img" aria-labelledby="title desc">
+  <title id="title">Mermade connected M logo</title>
+  <desc id="desc">An M-shaped flow connecting rectangle, stadium, decision, circle, and hexagon Mermaid nodes.</desc>
+  <path d="M28 160V28L94 96L160 28V160" fill="none" stroke="#E0095F" stroke-width="13" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="12" y="144" width="32" height="32" rx="4" fill="#FFFDFA" stroke="#E0095F" stroke-width="6"/>
+  <rect x="6" y="14" width="44" height="28" rx="14" fill="#FFFDFA" stroke="#E0095F" stroke-width="6"/>
+  <path d="M94 78 112 96 94 114 76 96Z" fill="#FFFDFA" stroke="#E0095F" stroke-width="6" stroke-linejoin="round"/>
+  <circle cx="160" cy="28" r="16" fill="#FFFDFA" stroke="#E0095F" stroke-width="6"/>
+  <path d="m160 142 18 9v18l-18 9-18-9v-18Z" fill="#FFFDFA" stroke="#E0095F" stroke-width="6" stroke-linejoin="round"/>
+</svg>

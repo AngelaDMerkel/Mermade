@@ -43,10 +43,31 @@ npm run build:pages
 
 The project supports two delivery paths from one editor core:
 
-- **GitHub Pages:** static, browser-local, ideal for the initial open-source release.
+- **GitHub Pages:** static, browser-local, ideal for the initial source-available release.
 - **Sites / Cloudflare:** the current Vinext production build, ready for later persistence and collaboration services.
 
 A later Docker image can serve the static editor with nginx first, then add an API only when shared documents, authentication, or real-time collaboration are introduced.
+
+## Acknowledgements and provenance
+
+- Diagram parsing and SVG rendering are powered by [Mermaid](https://github.com/mermaid-js/mermaid), used as an npm dependency under its own license.
+- Interface icons are provided by [Lucide](https://github.com/lucide-icons/lucide), also used as an npm dependency under its own license.
+- The browser application is built with React and Next.js, with Vinext providing the current Cloudflare-compatible build path.
+- The repository began with generated OpenAI Sites/Vinext project scaffolding. That boilerplate supplies build and optional hosting integration; it is separate from Mermade's editor implementation and is not required to host the editor through GitHub Pages.
+
+Mermade's editor UI, freeform canvas, interaction model, and Mermaid source adapter were implemented specifically for this project. No application code was copied or adapted from [saketkattu/mermaid-visual-editor](https://github.com/saketkattu/mermaid-visual-editor) or from Mermaid's own editor examples.
+
+## Brand assets
+
+The approved Connected M identity is available in `public/brand` as editable SVG masters and PNG exports. Its primary accent is Mermaid pink (`#E0095F`). The title card is supplied at 1200 × 630 pixels, and the favicon package includes SVG, PNG, Apple touch icon, and ICO formats.
+
+## License
+
+Copyright © 2026 Colin Alexander Duffy.
+
+Except where otherwise noted, Mermade's original source code, documentation, and visual assets are licensed under the [Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License](https://creativecommons.org/licenses/by-nc-sa/4.0/). Redistribution and adaptation require attribution, are limited to noncommercial use, and must remain under the same license. See [`LICENSE`](LICENSE) for the complete legal terms.
+
+Third-party packages and other externally sourced material are excluded from this grant and remain subject to their respective licenses. Patent and trademark rights are not granted.
 
 ## Near-term roadmap
 
