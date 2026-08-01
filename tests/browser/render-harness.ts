@@ -1,7 +1,11 @@
 import zenuml from "@mermaid-js/mermaid-zenuml";
+import elkLayouts from "@mermaid-js/layout-elk";
+import tidyTreeLayouts from "@mermaid-js/layout-tidy-tree";
 import mermaid from "mermaid";
+import mermaidV10 from "mermaid-v10";
 import { FLOWCHART_SHAPES } from "../../app/flowchart-shapes";
 import { normalizeRenderedSvg } from "../../app/mermaid-rendering";
+import { applyDiagramStyle, DEFAULT_DIAGRAM_STYLE } from "../../app/mermaid-style";
 import { MERMAID_DIAGRAM_TYPES } from "../../app/mermaid-types";
 
 type RenderMeasurement = {
@@ -14,6 +18,8 @@ type RenderMeasurement = {
   textCount: number;
   shapeCount: number;
   errorCount: number;
+  appearanceSignature: string;
+  layoutSignature: string;
   c4Title?: { x: number; expectedX: number; textAnchor: string };
 };
 
@@ -27,7 +33,7 @@ function typeFor(id: string) {
   return type;
 }
 
-function finiteBox(box: DOMRect | SVGRect) {
+function finiteBox(box: { x: number; y: number; width: number; height: number }) {
   return { x: box.x, y: box.y, width: box.width, height: box.height };
 }
 
@@ -87,6 +93,21 @@ async function renderSource(id: string, label: string, diagramTypeId: string, so
     const errorCount = svg.querySelectorAll(".error-icon, .error-text, [data-mermaid-error]").length;
     const viewBox = svg.viewBox.baseVal;
     const bounds = combinedBounds(content);
+    const appearanceSignature = [...svg.querySelectorAll<SVGElement>("rect, circle, ellipse, path, polygon, line")]
+      .slice(0, 80)
+      .map((element) => {
+        const style = getComputedStyle(element);
+        return `${element.tagName}:${style.fill}:${style.stroke}:${style.strokeWidth}`;
+      })
+      .join("|");
+    const layoutSignature = [...svg.querySelectorAll<SVGGraphicsElement>(".node, .cluster, text, foreignObject")]
+      .slice(0, 80)
+      .map((element) => {
+        const box = element.getBBox();
+        const matrix = element.getCTM();
+        return matrix ? `${Math.round(matrix.e)},${Math.round(matrix.f)},${Math.round(box.width)},${Math.round(box.height)}` : "";
+      })
+      .join("|");
     const titleText = source.match(/^\s*title\s+(.+?)\s*$/m)?.[1];
     const title = diagramTypeId === "c4" && titleText
       ? [...svg.children].find((element) => element.tagName.toLowerCase() === "text" && element.textContent?.trim() === titleText) as SVGTextElement | undefined
@@ -102,6 +123,8 @@ async function renderSource(id: string, label: string, diagramTypeId: string, so
       textCount: text.length,
       shapeCount: shapes.length,
       errorCount,
+      appearanceSignature,
+      layoutSignature,
       c4Title: title ? {
         x: Number(title.getAttribute("x")),
         expectedX: viewBox.x + viewBox.width / 2,
@@ -116,6 +139,53 @@ async function renderSource(id: string, label: string, diagramTypeId: string, so
 async function renderStarter(id: string) {
   const type = typeFor(id);
   return renderSource(type.id, type.label, type.id, type.template);
+}
+
+async function parseStyledStarter(id: string) {
+  const type = typeFor(id);
+  const source = applyDiagramStyle(type.template, {
+    ...DEFAULT_DIAGRAM_STYLE,
+    primaryColor: "#fde8f1",
+    lineColor: "#e0095f",
+  });
+  const result = await mermaid.parse(source);
+  return { id: type.id, diagramType: result.diagramType, source };
+}
+
+async function renderStyledStarter(id: string) {
+  const type = typeFor(id);
+  const source = applyDiagramStyle(type.template, {
+    ...DEFAULT_DIAGRAM_STYLE,
+    primaryColor: "#fde8f1",
+    lineColor: "#e0095f",
+  });
+  return renderSource(`styled-${type.id}`, `${type.label} with diagram style`, type.id, source);
+}
+
+const STYLE_FLOWCHART = `flowchart TB
+  A[Plan] --> B{Approved?}
+  A --> C[Review]
+  B --> D[Build]
+  B --> E[Test]
+  C --> F[Revise]`;
+
+async function renderStyleVariant(kind: "theme" | "look" | "layout", value: string) {
+  const diagramTypeId = kind === "layout" && value === "cose-bilkent" ? "mindmap" : "flowchart";
+  const baseSource = diagramTypeId === "mindmap" ? typeFor("mindmap").template : STYLE_FLOWCHART;
+  const source = applyDiagramStyle(baseSource, {
+    ...DEFAULT_DIAGRAM_STYLE,
+    [kind]: value,
+  });
+  const parsed = await mermaid.parse(source);
+  const rendered = await renderSource(`${kind}-${value}`, `${kind} ${value}`, diagramTypeId, source);
+  return { ...rendered, diagramType: parsed.diagramType, source };
+}
+
+async function parseLegacyStyledFlowchart() {
+  mermaidV10.initialize({ startOnLoad: false, securityLevel: "strict" });
+  const source = applyDiagramStyle("flowchart LR\n  A --> B", DEFAULT_DIAGRAM_STYLE);
+  const result = await mermaidV10.parse(source);
+  return { parsed: Boolean(result), source };
 }
 
 function shapeSource(id: string) {
@@ -135,6 +205,7 @@ async function renderShape(id: string) {
   return renderSource(shape.id, shape.label, "flowchart", source);
 }
 
+mermaid.registerLayoutLoaders([...elkLayouts, ...tidyTreeLayouts]);
 await mermaid.registerExternalDiagrams([zenuml]);
 mermaid.initialize({
   startOnLoad: false,
@@ -150,6 +221,10 @@ Object.assign(window, {
     shapes: FLOWCHART_SHAPES.map(({ id, label, mermaidShape }) => ({ id, label, mermaidShape })),
     parseStarter,
     renderStarter,
+    parseStyledStarter,
+    renderStyledStarter,
+    renderStyleVariant,
+    parseLegacyStyledFlowchart,
     parseShape,
     renderShape,
   },

@@ -97,6 +97,64 @@ test("every Mermaid type starter meets the SVG rendering standard", { timeout: 1
   }
 });
 
+test("diagram-wide frontmatter style parses and renders for every Mermaid type", { timeout: 120_000 }, async (t) => {
+  for (const type of types) {
+    await t.test(type.label, async () => {
+      const parsed = await page.evaluate((id) => window.mermadeStandards.parseStyledStarter(id), type.id);
+      assert.ok(parsed.diagramType, `${type.label} must parse with Mermade style frontmatter`);
+      assert.match(parsed.source, /^---\nconfig:/);
+
+      const rendered = await page.evaluate((id) => window.mermadeStandards.renderStyledStarter(id), type.id);
+      assert.ok(rendered.viewBox.width > 0 && rendered.viewBox.height > 0, `${type.label} styled render must have a positive viewBox`);
+      assert.ok(rendered.contentCount > 0, `${type.label} styled render must contain visible content`);
+      assert.equal(rendered.errorCount, 0, `${type.label} styled render must not contain Mermaid errors`);
+    });
+  }
+});
+
+test("every Mermaid 11 theme preset produces valid rendered SVG", { timeout: 120_000 }, async () => {
+  const themes = ["default", "base", "dark", "forest", "neutral", "neo", "neo-dark", "redux", "redux-dark", "redux-color", "redux-dark-color", "null"];
+  const signatures = new Set();
+  for (const theme of themes) {
+    const rendered = await page.evaluate((value) => window.mermadeStandards.renderStyleVariant("theme", value), theme);
+    assert.equal(rendered.diagramType, "flowchart-v2", `${theme} must parse as a flowchart`);
+    assert.ok(rendered.viewBox.width > 0 && rendered.viewBox.height > 0, `${theme} must produce positive SVG geometry`);
+    assert.equal(rendered.errorCount, 0, `${theme} must not produce Mermaid error output`);
+    signatures.add(rendered.appearanceSignature);
+  }
+  assert.ok(signatures.size >= 6, "theme presets must produce materially different rendered palettes");
+});
+
+test("every Mermaid 11 rendering look produces valid rendered SVG", { timeout: 120_000 }, async () => {
+  const looks = ["classic", "handDrawn", "neo"];
+  const signatures = new Set();
+  for (const look of looks) {
+    const rendered = await page.evaluate((value) => window.mermadeStandards.renderStyleVariant("look", value), look);
+    assert.ok(rendered.contentCount > 0, `${look} must render visible content`);
+    assert.equal(rendered.errorCount, 0, `${look} must not produce Mermaid error output`);
+    signatures.add(rendered.appearanceSignature);
+  }
+  assert.equal(signatures.size, looks.length, "each rendering look must produce distinct SVG styling");
+});
+
+test("every available graph layout engine produces valid rendered SVG", { timeout: 120_000 }, async () => {
+  const layouts = ["dagre", "elk", "tidy-tree", "cose-bilkent"];
+  const signatures = new Set();
+  for (const layout of layouts) {
+    const rendered = await page.evaluate((value) => window.mermadeStandards.renderStyleVariant("layout", value), layout);
+    assert.ok(rendered.bounds.width > 0 && rendered.bounds.height > 0, `${layout} must render visible graph geometry`);
+    assert.equal(rendered.errorCount, 0, `${layout} must not produce Mermaid error output`);
+    signatures.add(rendered.layoutSignature);
+  }
+  assert.ok(signatures.size >= 3, "layout controls must select materially different graph arrangements");
+});
+
+test("portable diagram style remains valid in the bundled Mermaid 10 engine", async () => {
+  const parsed = await page.evaluate(() => window.mermadeStandards.parseLegacyStyledFlowchart());
+  assert.ok(parsed.parsed, "styled source must parse with Mermaid 10.9.6");
+  assert.match(parsed.source, /theme: 'base'/);
+});
+
 test("double-clicking an unselected Mermaid flowchart node opens text editing", { timeout: 60_000 }, async () => {
   await browser?.close();
   await server?.close();
@@ -104,9 +162,9 @@ test("double-clicking an unselected Mermaid flowchart node opens text editing", 
   page = undefined;
   server = undefined;
 
-  appServer = spawn(process.execPath, ["node_modules/vinext/dist/cli.js", "dev", "--host", "127.0.0.1", "--port", "0"], {
+  appServer = spawn(process.execPath, ["node_modules/next/dist/bin/next", "dev", "--hostname", "127.0.0.1", "--port", "0"], {
     cwd: fileURLToPath(new URL("..", import.meta.url)),
-    env: { ...process.env, WRANGLER_LOG_PATH: ".wrangler/wrangler-interactions.log" },
+    env: process.env,
     stdio: ["ignore", "pipe", "pipe"],
   });
 
@@ -115,7 +173,7 @@ test("double-clicking an unselected Mermaid flowchart node opens text editing", 
     const timeout = setTimeout(() => reject(new Error(`Mermade interaction server did not start\n${output}`)), 30_000);
     const inspect = (chunk) => {
       output += chunk.toString();
-      const match = output.match(/Local:\s+http:\/\/(?:localhost|127\.0\.0\.1):(\d+)/);
+      const match = output.match(/Local:\s+http:\/\/(?:localhost|127\.0\.0\.1):(\d+)/i);
       if (!match) return;
       clearTimeout(timeout);
       resolve(Number(match[1]));
@@ -134,6 +192,19 @@ test("double-clicking an unselected Mermaid flowchart node opens text editing", 
   });
   page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
   await page.goto(`http://localhost:${port}`);
+  const welcome = page.locator(".welcome-dialog");
+  await welcome.waitFor({ state: "visible" });
+  assert.equal(await welcome.locator("h1").textContent(), "Make Mermaid diagrams without losing the Mermaid.");
+  assert.equal(await welcome.locator('a[href="https://github.com/AngelaDMerkel/Mermade"]').count(), 1);
+  await welcome.getByRole("button", { name: "Tour" }).click();
+  for (let index = 0; index < 7; index += 1) {
+    const card = page.locator(".tour-card");
+    await card.waitFor({ state: "visible" });
+    assert.match(await card.getAttribute("aria-label"), new RegExp(`Tour step ${index + 1} of 7`));
+    await card.getByRole("button", { name: index === 6 ? "Finish" : "Next" }).click();
+  }
+  await page.reload();
+  assert.equal(await page.locator(".welcome-dialog").count(), 0, "welcome should only appear on first launch");
   await page.locator(".mermaid-render svg").waitFor({ state: "visible" });
 
   const node = page.locator('[data-node-id="cart"]').first();
@@ -211,4 +282,33 @@ test("view switching preserves the selected node's viewport position", async () 
     const y = (nodeRect.top + nodeRect.height / 2 - scrollerRect.top) / scrollerRect.height;
     return Math.abs(x - before.x) < 0.025 && Math.abs(y - before.y) < 0.025;
   }, { selector: freeSelector, before });
+});
+
+test("source text uses focused undo before it is applied", async () => {
+  await page.locator(".secondary-button").filter({ hasText: "Source" }).click();
+  const sourceEditor = page.getByRole("textbox", { name: "Mermaid source" });
+  const original = await sourceEditor.inputValue();
+  await sourceEditor.evaluate((element) => element.setSelectionRange(element.value.length, element.value.length));
+  await sourceEditor.type("\n%% undo-check");
+  assert.match(await sourceEditor.inputValue(), /undo-check/);
+  await sourceEditor.press("Meta+z");
+  assert.equal(await sourceEditor.inputValue(), original);
+  await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+});
+
+test("invalid pasted source offers and applies only verified repair options", async () => {
+  await page.locator(".secondary-button").filter({ hasText: "Source" }).click();
+  const sourceEditor = page.locator(".source-editor-wrap textarea");
+  await sourceEditor.fill("```mermaid\nflowchart LR\n  A --> B\n```");
+  await page.locator(".source-panel .primary-button").filter({ hasText: "Apply to canvas" }).click();
+
+  const repairButton = page.locator(".inspector-footer button").filter({ hasText: "Repair Mermaid" });
+  await repairButton.waitFor({ state: "visible" });
+  await repairButton.click();
+  const repair = page.locator(".repair-option").filter({ hasText: "Remove the Markdown code fence" });
+  await repair.waitFor({ state: "visible" });
+  await repair.getByRole("button", { name: "Apply verified fix" }).click();
+  await page.locator(".inspector-footer").filter({ hasText: "Valid Mermaid Flowchart" }).waitFor({ state: "visible" });
+  await page.locator(".view-switch button").filter({ hasText: "Mermaid" }).click();
+  await page.locator(".mermaid-render svg").waitFor({ state: "visible" });
 });

@@ -23,6 +23,10 @@ Mermade is a browser-local visual editor for the diagram types supported by Merm
 - Undo and redo editor operations
 - Save the working diagram locally in the browser
 - Switch between left-to-right and top-to-bottom Mermaid directions
+- Apply every current Mermaid theme, rendering look, compatible graph layout, font, and Base-theme palette from the Style inspector; canvas rendering and SVG export use the same portable Mermaid frontmatter
+- Review parser-verified repair options for common syntax damage, Mermaid version mismatches, and diagram-specific structural errors
+- Learn the interface through a first-launch welcome dialog and optional guided tour, which can be restarted from Help
+- Use `F` to fit the chart and `O` to organise a flowchart, alongside the canvas tool shortcuts
 
 The rich direct-manipulation canvas currently provides its deepest node, relationship, and subgraph controls for flowcharts. Other diagram types use family-specific statement cards; a visual edit is committed only after the selected Mermaid engine parses the candidate source successfully.
 
@@ -43,16 +47,20 @@ Open `http://localhost:3000`.
 npm test
 ```
 
-The test command builds the local application and runs two registry-driven standards suites against every supported Mermaid type:
+The test command builds the local application and runs registry-driven standards suites against every supported Mermaid type:
 
 - **Syntax:** the starter source must pass Mermaid's real browser parser.
 - **Rendering:** the starter must produce a non-empty, error-free SVG with finite geometry, visible text and shapes, and non-distorting scaling. Type-specific regressions, such as C4 title placement, are checked in the same pass.
+- **Diagram style:** each starter must continue to parse and render after Mermade adds its portable frontmatter style configuration.
+- **Theme and layout engines:** every exposed Mermaid 11 theme, rendering look, and graph layout must produce valid, materially styled SVG; portable styling is also checked with Mermaid 10.
+
+Browser interaction tests additionally cover first-launch onboarding, the guided tour, verified source repair, direct Mermaid node editing, exact FreeForm shapes, and position-preserving view switches.
 
 Rendering tests use Playwright Core with an installed Google Chrome. Set `CHROME_PATH` when Chrome is installed in a nonstandard location. Adding a type to the shared registry automatically adds it to both suites, so a new type cannot silently skip the standards.
 
 ## GitHub Pages
 
-The editor has no server-side data dependency. The included workflow builds a static export and deploys it whenever `main` is pushed. In the repository settings, choose **GitHub Actions** as the Pages source.
+The editor has no server-side data dependency. The included workflow builds a static export and deploys it whenever `main` is pushed. Before the first deployment, open **Settings → Pages** in the repository and choose **GitHub Actions** as the Pages source. GitHub does not allow the workflow's default token to enable Pages for a repository that has never enabled it.
 
 You can verify the static target locally with:
 
@@ -62,20 +70,15 @@ npm run build:pages
 
 ## Deployment shape
 
-The project supports two delivery paths from one editor core:
-
-- **GitHub Pages:** static, browser-local, ideal for the initial source-available release.
-- **Sites / Cloudflare:** the current Vinext production build, ready for later persistence and collaboration services.
-
-A later Docker image can serve the static editor with nginx first, then add an API only when shared documents, authentication, or real-time collaboration are introduced.
+The current application is a static, browser-local GitHub Pages build with no authentication, database, worker, or server-side data dependency. A later Docker image can serve the same static editor with nginx first, then add an API only when shared documents, authentication, or real-time collaboration are introduced.
 
 ## Acknowledgements and provenance
 
 - Diagram parsing and SVG rendering are powered by [Mermaid](https://github.com/mermaid-js/mermaid), used as an npm dependency under its own license.
+- ELK and Tidy Tree layouts use Mermaid's official [`@mermaid-js/layout-elk`](https://www.npmjs.com/package/@mermaid-js/layout-elk) and [`@mermaid-js/layout-tidy-tree`](https://www.npmjs.com/package/@mermaid-js/layout-tidy-tree) packages.
 - ZenUML support is provided by Mermaid's official [`@mermaid-js/mermaid-zenuml`](https://github.com/mermaid-js/mermaid/tree/develop/packages/mermaid-zenuml) plugin.
 - Interface icons are provided by [Lucide](https://github.com/lucide-icons/lucide), also used as an npm dependency under its own license.
-- The browser application is built with React and Next.js, with Vinext providing the current Cloudflare-compatible build path.
-- The repository began with generated OpenAI Sites/Vinext project scaffolding. That boilerplate supplies build and optional hosting integration; it is separate from Mermade's editor implementation and is not required to host the editor through GitHub Pages.
+- The browser application is built with React and Next.js and exported statically for GitHub Pages.
 
 Mermade's editor UI, freeform canvas, interaction model, and Mermaid source adapter were implemented specifically for this project. No application code was copied or adapted from [saketkattu/mermaid-visual-editor](https://github.com/saketkattu/mermaid-visual-editor) or from Mermaid's own editor examples.
 
@@ -98,5 +101,5 @@ Third-party packages and other externally sourced material are excluded from thi
 1. Add deeper diagram-specific forms for Sequence, Gantt, State, Class, and ER syntax.
 2. Add alignment guides and auto-layout to the flowchart FreeForm canvas.
 3. Support editable edge routing and node ports.
-4. Add reusable themes and custom Mermaid `classDef` editing.
+4. Add reusable named style presets and custom Mermaid `classDef` editing.
 5. Add optional shared projects and multiplayer collaboration behind the Docker deployment.

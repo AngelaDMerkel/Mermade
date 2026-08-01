@@ -75,7 +75,7 @@ test("renders discoverable toolbar shortcuts", async () => {
   assert.match(html, /aria-label="Flowchart help"/);
   assert.match(html, /aria-label="Keyboard shortcuts"/);
   assert.match(html, /aria-label="Flowchart help"[\s\S]*?aria-label="Keyboard shortcuts"[\s\S]*?aria-label="Settings"/);
-  assert.match(html, /aria-label="Fit chart"/);
+  assert.match(html, /aria-label="Fit chart \(F\)"/);
   assert.doesNotMatch(html, /aria-label="Frame selection"/);
   assert.doesNotMatch(html, /> Share<\/button>/);
 });
@@ -86,8 +86,8 @@ test("provides dynamic diagram help with external guidance", async () => {
   assert.match(editor, /helpForDiagram\(activeDiagramType\.id\)/);
   assert.match(editor, /id="help-title">\{activeDiagramType\.label\} help/);
   assert.match(editor, /\{activeDiagramType\.template\}/);
-  assert.match(editor, />Good practice</);
-  assert.match(editor, />Watch for</);
+  assert.match(editor, />Recommended</);
+  assert.match(editor, />Avoid</);
   assert.match(editor, />References</);
   assert.match(editor, /target="_blank" rel="noreferrer"/);
 });
@@ -100,6 +100,18 @@ test("provides a complete keyboard-shortcuts reference", async () => {
   }
   assert.match(editor, /<kbd>⇧<\/kbd><kbd>N<\/kbd>/);
   assert.match(editor, /id="shortcuts-title">Keyboard shortcuts/);
+});
+
+test("keeps undo and redo local to focused source text", async () => {
+  const editor = await readFile(new URL("../app/mermaid-editor.tsx", import.meta.url), "utf8");
+
+  assert.match(editor, /const undoSourceDraft = \(\) =>/);
+  assert.match(editor, /const redoSourceDraft = \(\) =>/);
+  assert.match(editor, /target\.closest\("\.source-panel"\)/);
+  assert.match(editor, /if \(!editing && \(event\.metaKey \|\| event\.ctrlKey\) && key === "z"\)/);
+  assert.match(editor, /textarea aria-label="Mermaid source"/);
+  assert.match(editor, /label="Undo source edit"/);
+  assert.match(editor, /label="Redo source edit"/);
 });
 
 test("keeps the diagram type picker clickable and compact", async () => {
@@ -131,7 +143,7 @@ test("keeps rendered Mermaid nodes stable between click and double-click", async
   assert.match(editor, /onDoubleClick=\{editMermaidElement\}/);
   assert.match(editor, /setEditingNode\(nodeId\)/);
   assert.match(editor, /viewMode === "mermaid" && editingNode && selectedNode/);
-  assert.match(editor, /\}, \[activeDiagramType\.id, activeMermaidVersion, diagram\.edges, diagram\.groups, diagram\.nodes, restoreViewAnchor, source, viewMode\]\);/);
+  assert.match(editor, /\}, \[activeDiagramType\.id, activeMermaidVersion, diagramStyle\.layout, restoreViewAnchor, source, viewMode\]\);/);
   assert.doesNotMatch(editor, /diagram\.nodes, selected, source, viewMode/);
 });
 
@@ -160,8 +172,75 @@ test("auto-organizes pasted flowcharts from their relationships", async () => {
   const editor = await readFile(new URL("../app/mermaid-editor.tsx", import.meta.url), "utf8");
 
   assert.match(editor, /layoutFlowchart\(parsedNodes, edges, direction\)/);
-  assert.match(editor, /label="Organize flowchart"/);
+  assert.match(editor, /label="Organise chart \(O\)"/);
   assert.match(editor, /shouldFitFreeformRef\.current = true/);
+});
+
+test("provides diagram-wide Mermaid styling as a third inspector scope", async () => {
+  const editor = await readFile(new URL("../app/mermaid-editor.tsx", import.meta.url), "utf8");
+
+  assert.match(editor, />Properties<\/button>/);
+  assert.match(editor, />Appearance<\/button>/);
+  assert.match(editor, />Style<\/button>/);
+  assert.match(editor, /applyDiagramStyle/);
+  assert.match(editor, />Layout<\/span>/);
+  assert.match(editor, /Base — customizable/);
+  assert.match(editor, /redux-dark-color/);
+  assert.match(editor, /cose-bilkent/);
+  assert.match(editor, /This preset owns its palette/);
+  assert.match(editor, /Rendering styles and layouts require Mermaid 11/);
+  assert.doesNotMatch(editor, /diagram-style-heading/);
+});
+
+test("loads optional Mermaid engines and layout plugins only when requested", async () => {
+  const editor = await readFile(new URL("../app/mermaid-editor.tsx", import.meta.url), "utf8");
+
+  assert.match(editor, /diagramTypeId === "zenuml"/);
+  assert.match(editor, /layout === "elk" \|\| layout === "tidy-tree"/);
+  assert.match(editor, /ensureMermaidFeature/);
+  assert.doesNotMatch(editor, /Promise\.all\(\[\s*import\("@mermaid-js\/layout-elk"\)/);
+});
+
+test("keeps the workspace chrome visible while the Style pane scrolls", async () => {
+  const css = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+
+  assert.match(css, /\.workspace \{[^}]*grid-template-rows: minmax\(0, 1fr\);[^}]*overflow: hidden;/);
+  assert.match(css, /\.inspector \{[^}]*min-height: 0;[^}]*overflow: hidden;/);
+  assert.match(css, /\.inspector-body \{[^}]*min-height: 0;[^}]*overflow-y: auto;/);
+  assert.match(css, /\.inspector-footer \{[^}]*flex: 0 0 40px;/);
+  assert.match(css, /\.rail-help-stack \{[^}]*flex: 0 0 auto;/);
+});
+
+test("provides first-launch onboarding and a restartable interface tour", async () => {
+  const editor = await readFile(new URL("../app/mermaid-editor.tsx", import.meta.url), "utf8");
+
+  assert.match(editor, /mermade-onboarding-v1/);
+  assert.match(editor, />Start Editing<\/button>/);
+  assert.match(editor, />Tour<\/button>/);
+  assert.match(editor, /https:\/\/github\.com\/AngelaDMerkel\/Mermade/);
+  assert.match(editor, /Restart interface tour/);
+  assert.match(editor, /TOUR_STEPS/);
+});
+
+test("exposes verified layered Mermaid repair options", async () => {
+  const editor = await readFile(new URL("../app/mermaid-editor.tsx", import.meta.url), "utf8");
+
+  assert.match(editor, /createRepairProposals/);
+  assert.match(editor, /await validateSource\(option\.source, version\)/);
+  assert.match(editor, /Repair Mermaid \{statusDiagramType\.label\}/);
+  assert.match(editor, />Apply verified fix<\/button>/);
+  assert.match(editor, /setInvalidSource\(sourceDraft\)/);
+});
+
+test("provides Fit Chart and Organise Chart hotkeys", async () => {
+  const editor = await readFile(new URL("../app/mermaid-editor.tsx", import.meta.url), "utf8");
+
+  assert.match(editor, /label="Fit chart \(F\)" shortcut="F"/);
+  assert.match(editor, /label="Organise chart \(O\)" shortcut="O"/);
+  assert.match(editor, /key === "f"/);
+  assert.match(editor, /key === "o"/);
+  assert.match(editor, />Fit Chart<\/b><kbd>F<\/kbd>/);
+  assert.match(editor, />Organise Chart<\/b><kbd>O<\/kbd>/);
 });
 
 test("offers best-practice flowchart shapes before the complete Mermaid catalog", async () => {
@@ -203,6 +282,31 @@ test("ships the approved Mermaid-pink brand assets", async () => {
   assert.match(mark, /M94 78 112 96 94 114 76 96Z/);
   assert.equal(ogPng.subarray(0, 8).toString("hex"), "89504e470d0a1a0a");
   assert.equal(faviconIco.subarray(0, 4).toString("hex"), "00000100");
+});
+
+test("keeps public assets under the GitHub Pages base path", async () => {
+  const [config, layout, editor, css] = await Promise.all([
+    readFile(new URL("../next.config.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/mermaid-editor.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(config, /NEXT_PUBLIC_BASE_PATH: basePath/);
+  assert.match(layout, /publicBasePath/);
+  assert.match(editor, /PUBLIC_BASE_PATH/);
+  assert.doesNotMatch(css, /url\(["']\/brand\//);
+});
+
+test("uses current Node 24 GitHub Pages actions without a provisioning-only configure step", async () => {
+  const workflow = await readFile(new URL("../.github/workflows/pages.yml", import.meta.url), "utf8");
+
+  assert.match(workflow, /actions: read/);
+  assert.match(workflow, /actions\/checkout@v6/);
+  assert.match(workflow, /actions\/setup-node@v6/);
+  assert.match(workflow, /actions\/upload-pages-artifact@v5/);
+  assert.match(workflow, /actions\/deploy-pages@v5/);
+  assert.doesNotMatch(workflow, /actions\/configure-pages/);
 });
 
 test("declares the CC BY-NC-SA 4.0 repository license", async () => {
