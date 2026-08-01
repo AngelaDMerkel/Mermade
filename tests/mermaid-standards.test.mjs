@@ -193,7 +193,7 @@ test("double-clicking an unselected Mermaid flowchart node opens text editing", 
     headless: true,
   });
   page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
-  await page.goto(`http://localhost:${port}`);
+  await page.goto(`http://127.0.0.1:${port}`);
   const welcome = page.locator(".welcome-dialog");
   await welcome.waitFor({ state: "visible" });
   assert.equal(await welcome.locator("h1").textContent(), "Make Mermaid diagrams without losing the Mermaid.");
