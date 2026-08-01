@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
@@ -137,6 +138,14 @@ test("every Mermaid 11 rendering look produces valid rendered SVG", { timeout: 1
   assert.equal(signatures.size, looks.length, "each rendering look must produce distinct SVG styling");
 });
 
+test("flowchart relationships remain visible when the canvas is zoomed out", async () => {
+  const rendered = await page.evaluate(() => window.mermadeStandards.renderStyleVariant("theme", "base"));
+
+  assert.ok(rendered.edgeCount > 0, "the flowchart fixture must contain relationships");
+  assert.equal(rendered.nonScalingEdgeCount, rendered.edgeCount, "every relationship must retain a readable screen-width stroke");
+  assert.equal(rendered.readableEdgeCount, rendered.edgeCount, "normal relationships must not collapse into one-pixel lines");
+});
+
 test("every available graph layout engine produces valid rendered SVG", { timeout: 120_000 }, async () => {
   const layouts = ["dagre", "elk", "tidy-tree", "cose-bilkent"];
   const signatures = new Set();
@@ -240,9 +249,110 @@ test("double-clicking an unselected Mermaid flowchart node opens text editing", 
   assert.equal(await editor.inputValue(), "Cart");
 });
 
+test("every registered diagram supports its intended canvas modes", { timeout: 300_000 }, async (t) => {
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Source", exact: true }).click();
+  const originalSource = await page.getByRole("textbox", { name: "Mermaid source" }).inputValue();
+  await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+
+  const polishedTypes = new Set(["flowchart", "state", "sequence", "class", "er", "xychart"]);
+  const modeNames = { freeform: "FreeForm", structured: "Structured", data: "Data" };
+
+  try {
+    for (const type of types) {
+      await t.test(type.label, async () => {
+        await page.getByRole("button", { name: "Source", exact: true }).click();
+        await page.getByRole("textbox", { name: "Mermaid source" }).fill(type.template);
+        await page.getByRole("button", { name: "Apply to canvas" }).click();
+        await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+
+        const mermaidButton = page.locator(".view-switch button").filter({ hasText: "Mermaid" });
+        await mermaidButton.click();
+        const mermaidCanvas = page.locator(".mermaid-render:not(.polished-render)");
+        await mermaidCanvas.locator(":scope > svg").waitFor({ state: "visible" });
+        assert.equal(await page.locator(".mermaid-render-error").count(), 0, `${type.label} Mermaid canvas must render`);
+
+        await page.getByRole("button", { name: "Source", exact: true }).click();
+        const declaration = type.template.split(/\s/)[0];
+        assert.ok((await page.getByRole("textbox", { name: "Mermaid source" }).inputValue()).includes(declaration), `${type.label} Mermaid canvas must retain editable canonical source`);
+        await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+
+        const visualMode = modeNames[type.family];
+        await page.locator(".view-switch button").filter({ hasText: visualMode }).click();
+        if (type.id === "flowchart") {
+          await page.locator(".diagram-board .diagram-node").first().waitFor({ state: "visible" });
+        } else {
+          const visualEditor = page.getByRole("region", { name: `${visualMode} editor for ${type.label}` });
+          await visualEditor.waitFor({ state: "visible" });
+          await visualEditor.getByRole("button", { name: "Add statement" }).click();
+          await visualEditor.getByRole("button", { name: "Validate & apply" }).click();
+          await page.getByRole("region", { name: `${visualMode} editor for ${type.label}` }).waitFor({ state: "visible" });
+          assert.equal(await page.locator(".semantic-error").count(), 0, `${type.label} visual edit must remain valid Mermaid`);
+        }
+
+        const polishedButton = page.locator(".view-switch button").filter({ hasText: "Beautiful" });
+        assert.equal(await polishedButton.isEnabled(), polishedTypes.has(type.id), `${type.label} Beautiful availability must match Beautiful Mermaid`);
+        if (polishedTypes.has(type.id)) {
+          await polishedButton.click();
+          const polishedCanvas = page.locator(".polished-render");
+          await polishedCanvas.locator(":scope > svg").waitFor({ state: "visible" });
+          assert.equal(await page.locator(".mermaid-render-error").count(), 0, `${type.label} Beautiful canvas must render`);
+          await page.getByRole("button", { name: "Source", exact: true }).click();
+          assert.ok((await page.getByRole("textbox", { name: "Mermaid source" }).inputValue()).includes(declaration), `${type.label} Beautiful canvas must retain editable canonical source`);
+          await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+        }
+      });
+    }
+  } finally {
+    await page.getByRole("button", { name: "Source", exact: true }).click();
+    await page.getByRole("textbox", { name: "Mermaid source" }).fill(originalSource);
+    await page.getByRole("button", { name: "Apply to canvas" }).click();
+    await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+    await page.locator(".view-switch button").filter({ hasText: "Mermaid" }).click();
+    await page.locator(".mermaid-render:not(.polished-render) svg").waitFor({ state: "visible" });
+  }
+});
+
+test("ELK renders in React and Tidy Tree rejects incompatible subgraphs", { timeout: 60_000 }, async () => {
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Style", exact: true }).click();
+  const layoutSelect = page
+    .locator(".diagram-style-panel label")
+    .filter({ hasText: "Layout" })
+    .locator("select");
+  const previousSvgId = await page.locator(".mermaid-render svg").getAttribute("id");
+
+  await layoutSelect.selectOption("elk");
+  await page.waitForFunction((previousId) => {
+    const svg = document.querySelector(".mermaid-render svg");
+    return Boolean(svg?.id && svg.id !== previousId && !document.querySelector(".mermaid-render-error"));
+  }, previousSvgId);
+
+  assert.equal(await page.locator(".mermaid-render-error").count(), 0, "ELK must render without an error in hydrated React");
+  assert.ok(await page.locator(".mermaid-render .node").count() >= 7, "ELK must render the complete flowchart");
+
+  await layoutSelect.selectOption("tidy-tree");
+  await page
+    .locator(".toast")
+    .filter({ hasText: "Tidy Tree cannot render Flowchart subgraphs" })
+    .waitFor({ state: "visible" });
+
+  assert.equal(await layoutSelect.inputValue(), "elk", "an incompatible Tidy Tree selection must not replace the working layout");
+  assert.equal(await page.locator(".mermaid-render-error").count(), 0, "the last successful render must remain error-free");
+
+  const elkSvgId = await page.locator(".mermaid-render svg").getAttribute("id");
+  await layoutSelect.selectOption("dagre");
+  await page.waitForFunction((previousId) => {
+    const svg = document.querySelector(".mermaid-render svg");
+    return Boolean(svg?.id && svg.id !== previousId && !document.querySelector(".mermaid-render-error"));
+  }, elkSvgId);
+  await page.locator(".inspector-tabs").getByRole("button", { name: "Properties" }).click();
+});
+
 test("FreeForm nodes retain their exact Mermaid shape class", async () => {
   await page.keyboard.press("Escape");
   await page.locator(".view-switch button").filter({ hasText: "FreeForm" }).click();
+  await page.locator('.diagram-node[data-node-id="cart"]').click();
   const shapeSelect = page.locator(".field-stack label").filter({ hasText: "Shape" }).locator("select");
 
   await shapeSelect.selectOption("cloud");
@@ -308,6 +418,73 @@ test("view switching preserves the selected node's viewport position", async () 
   }, { selector: freeSelector, before });
 });
 
+test("Beautiful view lazy-renders a selectable, styled flowchart", { timeout: 60_000 }, async () => {
+  await page.locator(".view-switch button").filter({ hasText: "Beautiful" }).click();
+  await page.locator(".polished-render svg").waitFor({ state: "visible" });
+
+  assert.equal(await page.locator(".mermaid-render-error").count(), 0, "the supported starter must render without a Beautiful error");
+  const rootStyle = await page.locator(".polished-render svg").getAttribute("style");
+  assert.match(rootStyle || "", /--bg:[^;]+;--fg:/, "the adaptive theme must provide Beautiful Mermaid's two-colour contract");
+  assert.doesNotMatch(rootStyle || "", /--(?:line|accent|muted|surface|border):/, "the adaptive theme must leave Beautiful Mermaid's derived palette intact");
+  assert.match(await page.locator(".polished-render svg style").textContent(), /font-family: 'Inter'/, "the Beautiful font must be a valid family name");
+  assert.ok(await page.locator(".polished-render [data-node-id]").count() >= 7, "the complete starter flowchart must remain interactive");
+  assert.equal(await page.locator('.polished-render [data-node-id="details"] > rect').getAttribute("fill"), "#fde8f1", "supported source styles must reach the Beautiful SVG by default");
+  const node = page.locator('.polished-render [data-node-id="cart"]');
+  await node.click();
+  assert.match(await node.getAttribute("class"), /selected/);
+
+  await page.getByRole("button", { name: "Style", exact: true }).click();
+  const theme = page.locator(".diagram-style-panel label").filter({ hasText: "Beautiful theme" }).locator("select");
+  await theme.selectOption("dracula");
+  await page.waitForFunction(() => Boolean(document.querySelector('.polished-render svg[style*="#282a36"]')));
+  assert.equal(await page.locator(".polished-render svg").getAttribute("preserveAspectRatio"), "xMidYMid meet");
+
+  await page.locator(".view-switch button").filter({ hasText: "Mermaid" }).click();
+  await page.locator(".mermaid-render:not(.polished-render) svg").waitFor({ state: "visible" });
+  await page.locator(".inspector-tabs").getByRole("button", { name: "Properties" }).click();
+});
+
+test("Unicode export downloads UTF-8 text without blocking on large flowcharts", { timeout: 60_000 }, async () => {
+  await page.getByRole("button", { name: "Source", exact: true }).click();
+  const sourceEditor = page.getByRole("textbox", { name: "Mermaid source" });
+  const originalSource = await sourceEditor.inputValue();
+  await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+
+  const downloadUnicode = async () => {
+    await page.getByRole("button", { name: "Export", exact: true }).click();
+    const downloadPromise = page.waitForEvent("download");
+    await page.getByRole("button", { name: /Unicode diagram/ }).click();
+    const download = await downloadPromise;
+    return readFile(await download.path(), "utf8");
+  };
+
+  try {
+    const ordinary = await downloadUnicode();
+    assert.equal(ordinary.charCodeAt(0), 0xfeff, "Unicode text must carry an explicit UTF-8 BOM");
+    assert.match(ordinary, /[┌┐└┘─│◇○]/, "ordinary diagrams must use Beautiful Mermaid's spatial Unicode renderer");
+
+    const lines = ["flowchart TB"];
+    for (let index = 0; index < 30; index += 1) lines.push(`n${index}[\"Step ${index}\"]`);
+    for (let index = 0; index < 29; index += 1) lines.push(`n${index} --> n${index + 1}`);
+    await page.getByRole("button", { name: "Source", exact: true }).click();
+    await page.getByRole("textbox", { name: "Mermaid source" }).fill(lines.join("\n"));
+    await page.getByRole("button", { name: "Apply to canvas" }).click();
+    await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+
+    const started = Date.now();
+    const large = await downloadUnicode();
+    assert.ok(Date.now() - started < 10_000, "large Unicode export must remain responsive");
+    assert.match(large, /UNICODE RELATIONSHIP MAP/);
+    assert.match(large, /Step 0[\s\S]*Step 1/);
+  } finally {
+    await page.getByRole("button", { name: "Source", exact: true }).click();
+    await page.getByRole("textbox", { name: "Mermaid source" }).fill(originalSource);
+    const restore = page.getByRole("button", { name: "Apply to canvas" });
+    if (await restore.isEnabled()) await restore.click();
+    await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+  }
+});
+
 test("source text uses focused undo before it is applied", async () => {
   await page.locator(".secondary-button").filter({ hasText: "Source" }).click();
   const sourceEditor = page.getByRole("textbox", { name: "Mermaid source" });
@@ -335,4 +512,64 @@ test("invalid pasted source offers and applies only verified repair options", as
   await page.locator(".inspector-footer").filter({ hasText: "Valid Mermaid Flowchart" }).waitFor({ state: "visible" });
   await page.locator(".view-switch button").filter({ hasText: "Mermaid" }).click();
   await page.locator(".mermaid-render svg").waitFor({ state: "visible" });
+});
+
+test("Tidy Tree renders a compatible hierarchy in React", { timeout: 60_000 }, async () => {
+  await page.getByRole("button", { name: "Style", exact: true }).click();
+  const layoutSelect = page
+    .locator(".diagram-style-panel label")
+    .filter({ hasText: "Layout" })
+    .locator("select");
+  const previousSvgId = await page.locator(".mermaid-render svg").getAttribute("id");
+
+  await layoutSelect.selectOption("tidy-tree");
+  await page.waitForFunction((previousId) => {
+    const svg = document.querySelector(".mermaid-render svg");
+    return Boolean(svg?.id && svg.id !== previousId && !document.querySelector(".mermaid-render-error"));
+  }, previousSvgId);
+
+  assert.equal(await page.locator(".mermaid-render-error").count(), 0, "Tidy Tree must render a verified hierarchy without an error");
+  assert.equal(await page.locator(".mermaid-render .node").count(), 2, "Tidy Tree must render both hierarchy nodes");
+});
+
+test("advanced flowcharts retain the spatial canvas, direction controls, and tools", { timeout: 60_000 }, async () => {
+  const advancedSource = `flowchart TB
+  %% preserve this explanation
+  A@{ shape: stadium, label: "Start" }
+  B@{ shape: diam, label: "Ready?" }
+  C["PB&S"]
+  A --> B --> C
+  classDef important stroke:#8c52ff
+  class B important
+  click B "/details" "Open details"`;
+
+  await page.locator(".secondary-button").filter({ hasText: "Source" }).click();
+  await page.locator(".source-editor-wrap textarea").fill(advancedSource);
+  await page.locator(".source-panel .primary-button").filter({ hasText: "Apply to canvas" }).click();
+  await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+
+  const direction = page.locator('.direction-switch[aria-label="Chart direction"]');
+  await direction.waitFor({ state: "visible" });
+  assert.equal(await direction.getByRole("button").count(), 2);
+  for (const label of ["Select (V)", "Marquee select (M)", "Add node (N)", "Link nodes (L)", "Create subgraph (S)", "Add decision (D)", "Organise chart (O)"]) {
+    assert.equal(await page.getByRole("button", { name: label }).isEnabled(), true, `${label} must remain enabled`);
+  }
+
+  await direction.getByRole("button", { name: "Left → right" }).click();
+  await page.locator(".view-switch button").filter({ hasText: "FreeForm" }).click();
+  await page.locator(".diagram-board").waitFor({ state: "visible" });
+  assert.equal(await page.locator(".semantic-editor").count(), 0, "a complex flowchart must not be sent to the generic statement editor");
+  assert.equal(await page.locator(".diagram-board .diagram-node").count(), 3);
+  assert.equal(await page.locator(".diagram-board .diagram-edge").count(), 2, "chained relationships must remain spatially represented");
+
+  await page.getByRole("button", { name: "Add node (N)" }).click();
+  assert.equal(await page.locator(".diagram-board .diagram-node").count(), 4, "node creation must work on protected source");
+  await page.locator(".view-switch button").filter({ hasText: "Mermaid" }).click();
+  await page.locator(".mermaid-render svg").waitFor({ state: "visible" });
+  assert.equal(await page.locator(".mermaid-render-error").count(), 0, "source-preserving canvas edits must remain valid Mermaid");
+  await page.locator(".secondary-button").filter({ hasText: "Source" }).click();
+  const updatedSource = await page.locator(".source-editor-wrap textarea").inputValue();
+  assert.match(updatedSource, /^flowchart LR/m);
+  assert.match(updatedSource, /click B "\/details" "Open details"/);
+  assert.match(updatedSource, /node4\["New step"\]/);
 });

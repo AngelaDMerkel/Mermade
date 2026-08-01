@@ -18,6 +18,9 @@ type RenderMeasurement = {
   textCount: number;
   shapeCount: number;
   errorCount: number;
+  edgeCount: number;
+  nonScalingEdgeCount: number;
+  readableEdgeCount: number;
   appearanceSignature: string;
   layoutSignature: string;
   c4Title?: { x: number; expectedX: number; textAnchor: string };
@@ -91,6 +94,7 @@ async function renderSource(id: string, label: string, diagramTypeId: string, so
     const text = content.filter((element) => element.matches("text, foreignObject"));
     const shapes = content.filter((element) => !element.matches("text, foreignObject"));
     const errorCount = svg.querySelectorAll(".error-icon, .error-text, [data-mermaid-error]").length;
+    const edges = [...svg.querySelectorAll<SVGGeometryElement>(".flowchart-link")];
     const viewBox = svg.viewBox.baseVal;
     const bounds = combinedBounds(content);
     const appearanceSignature = [...svg.querySelectorAll<SVGElement>("rect, circle, ellipse, path, polygon, line")]
@@ -123,6 +127,9 @@ async function renderSource(id: string, label: string, diagramTypeId: string, so
       textCount: text.length,
       shapeCount: shapes.length,
       errorCount,
+      edgeCount: edges.length,
+      nonScalingEdgeCount: edges.filter((edge) => edge.getAttribute("vector-effect") === "non-scaling-stroke").length,
+      readableEdgeCount: edges.filter((edge) => Number.parseFloat(edge.style.strokeWidth) >= 1.5 || edge.classList.contains("edge-thickness-thick")).length,
       appearanceSignature,
       layoutSignature,
       c4Title: title ? {
@@ -217,7 +224,7 @@ mermaid.initialize({
 Object.assign(window, {
   mermadeStandards: {
     ready: true,
-    types: MERMAID_DIAGRAM_TYPES.map(({ id, label, family }) => ({ id, label, family })),
+    types: MERMAID_DIAGRAM_TYPES.map(({ id, label, family, template }) => ({ id, label, family, template })),
     shapes: FLOWCHART_SHAPES.map(({ id, label, mermaidShape }) => ({ id, label, mermaidShape })),
     parseStarter,
     renderStarter,

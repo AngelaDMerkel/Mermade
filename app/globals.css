@@ -188,6 +188,20 @@ button { color: inherit; }
 .direction-switch button, .view-switch button { display: flex; align-items: center; gap: 4px; padding: 5px 8px; border: 0; border-radius: 5px; color: var(--muted); background: transparent; font-size: 10px; cursor: pointer; }
 .direction-switch button.active, .view-switch button.active { color: var(--ink); background: white; box-shadow: 0 1px 4px rgb(44 38 55 / 9%); }
 .view-switch button.active { color: var(--purple-dark); }
+.view-switch button:disabled { opacity: .38; cursor: not-allowed; }
+.beautiful-mermaid-mark {
+  display: block;
+  flex: none;
+}
+.beautiful-mermaid-mark .badge-piece {
+  fill: none;
+  stroke: var(--purple);
+  stroke-width: 1.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+.view-switch button:not(.active) .beautiful-mermaid-mark { filter: saturate(.72); opacity: .82; }
 
 .canvas-scroll { position: absolute; inset: 0; overflow: auto; overscroll-behavior: none; scrollbar-color: #c9c4cd transparent; scrollbar-width: thin; }
 .diagram-surface {
@@ -217,20 +231,28 @@ button { color: inherit; }
 }
 .mermaid-stage { position: absolute; transform-origin: 0 0; }
 .mermaid-render { width: 100%; height: 100%; }
-.mermaid-render svg { display: block; width: 100% !important; height: 100% !important; max-width: none !important; overflow: visible; }
-.mermaid-render [data-node-id], .mermaid-render [data-edge-id], .mermaid-render [data-group-id] { cursor: pointer; }
-.mermaid-render .mermaid-edge-hit { fill: none !important; stroke: transparent !important; stroke-width: 16px !important; pointer-events: stroke; }
-.mermaid-render [data-node-id].selected {
-  filter: drop-shadow(0 3px 5px rgb(224 9 95 / 22%));
+.polished-render {
+  --mermade-polished-bg: #fffdfa;
+  --mermade-polished-fg: #27232a;
 }
+.mermaid-render svg { display: block; width: 100% !important; height: 100% !important; max-width: none !important; overflow: visible; }
+.dokuwiki-mermaid .nodeLabel, .dokuwiki-mermaid .nodeLabel p { font-size: 12px !important; line-height: 1.5 !important; }
+.mermaid-render [data-node-id], .mermaid-render [data-edge-id], .mermaid-render [data-group-id], .mermaid-render [data-source-line] { cursor: pointer; }
+.mermaid-render .mermaid-edge-hit { fill: none !important; stroke: transparent !important; stroke-width: 16px !important; pointer-events: stroke; }
+.mermaid-render [data-node-id].selected { filter: none; }
 .mermaid-render [data-node-id].selected > rect,
 .mermaid-render [data-node-id].selected > circle,
 .mermaid-render [data-node-id].selected > ellipse,
 .mermaid-render [data-node-id].selected > polygon,
-.mermaid-render [data-node-id].selected > path { stroke: var(--purple) !important; stroke-width: 3px !important; }
+.mermaid-render [data-node-id].selected > path,
+.mermaid-render [data-node-id].selected .label-container { stroke: var(--purple) !important; stroke-width: 3.5px !important; }
 .mermaid-render [data-edge-id].selected:not(.mermaid-edge-hit) { stroke: var(--purple) !important; stroke-width: 3px !important; }
 .mermaid-render [data-group-id].selected > rect { stroke: var(--purple) !important; stroke-width: 3px !important; fill: #fde8f1 !important; }
 .mermaid-render [data-group-id].selected .cluster-label { color: var(--purple-dark) !important; font-weight: 650; }
+.mermaid-render [data-source-line].selected { filter: drop-shadow(0 2px 4px rgb(224 9 95 / 18%)); }
+.mermaid-render [data-source-line].selected text { fill: var(--purple) !important; font-weight: 650; }
+.polished-render [data-edge-id].selected > * { stroke: var(--purple) !important; stroke-width: 3px !important; }
+.polished-credit { position: absolute; right: 8px; bottom: 8px; display: flex; align-items: center; gap: 5px; padding: 5px 7px; border: 1px solid rgb(224 9 95 / 18%); border-radius: 6px; color: #8a6373; background: rgb(255 255 255 / 78%); font-size: 8px; pointer-events: none; }
 .mermaid-render-error { position: absolute; inset: 0; display: flex; height: 100%; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 40px; border: 1px dashed #d0c9d8; border-radius: 14px; color: var(--muted); background: rgb(255 253 250 / 92%); text-align: center; }
 .mermaid-render-error svg { color: var(--purple); }.mermaid-render-error b { color: var(--ink); font-size: 13px; }.mermaid-render-error span { max-width: 460px; font-size: 10px; line-height: 1.5; }
 
@@ -280,7 +302,7 @@ button { color: inherit; }
   background: var(--node-color);
   box-shadow: 0 2px 4px rgb(35 28 44 / 4%);
   text-align: center;
-  transition: box-shadow 130ms ease, border-color 130ms ease;
+  transition: filter 130ms ease, box-shadow 130ms ease, border-color 130ms ease;
 }
 .node-shape span { font-size: 12px; font-weight: 570; line-height: 1.25; }
 .shape-rounded .node-shape { border-radius: 24px; }
@@ -358,7 +380,10 @@ button { color: inherit; }
 .mermaid-shape-tag-rect .node-shape { clip-path: polygon(0 0, 84% 0, 100% 24%, 100% 100%, 0 100%); border-radius: 0; }
 .mermaid-shape-text .node-shape { border-color: transparent; background: transparent; box-shadow: none; }
 .diagram-node:hover .node-shape { border-color: #5e5865; box-shadow: 0 4px 13px rgb(45 36 57 / 8%); }
-.diagram-node.selected .node-shape { border-color: var(--purple); box-shadow: 0 0 0 2px rgb(224 9 95 / 15%), 0 5px 16px rgb(110 13 54 / 9%); }
+.diagram-node.selected .node-shape {
+  border-color: var(--purple);
+  filter: drop-shadow(1px 0 0 var(--purple)) drop-shadow(-1px 0 0 var(--purple)) drop-shadow(0 1px 0 var(--purple)) drop-shadow(0 -1px 0 var(--purple));
+}
 .diagram-node.connection-start .node-shape { border-color: var(--purple); box-shadow: 0 0 0 5px rgb(224 9 95 / 15%); }
 .handle { position: absolute; z-index: 6; width: 7px; height: 7px; border: 1px solid white; border-radius: 2px; background: var(--purple); box-shadow: 0 0 0 1px var(--purple); }
 .handle.nw { left: -3px; top: -3px; }.handle.ne { right: -3px; top: -3px; }.handle.sw { left: -3px; bottom: -3px; }.handle.se { right: -3px; bottom: -3px; }
@@ -384,6 +409,9 @@ button { color: inherit; }
 .mermaid-inline-editor { position: absolute; z-index: 18; top: 76px; left: 50%; display: flex; align-items: center; gap: 9px; padding: 7px 8px 7px 12px; border: 1px solid #d9d3e2; border-radius: 9px; background: white; box-shadow: 0 12px 34px rgb(37 27 54 / 18%); transform: translateX(-50%); }
 .mermaid-inline-editor span { color: var(--muted); font-size: 9px; font-weight: 650; letter-spacing: .05em; text-transform: uppercase; white-space: nowrap; }
 .mermaid-inline-editor input { width: 220px; padding: 7px 9px; border: 1px solid #a18be8; border-radius: 6px; outline: none; font-size: 11px; }
+.mermaid-statement-editor input { width: min(520px, 48vw); font-family: var(--font-geist-mono); }
+.mermaid-statement-editor .primary-button { min-height: 31px; padding: 0 11px; border: 0; border-radius: 6px; color: white; background: var(--purple); font-size: 10px; font-weight: 650; cursor: pointer; }
+.mermaid-statement-editor .primary-button:disabled { opacity: .55; cursor: wait; }
 
 .semantic-editor {
   position: absolute;
@@ -452,6 +480,8 @@ button { color: inherit; }
 
 .field-stack { display: flex; flex-direction: column; gap: 17px; }
 .field-stack label { display: flex; flex-direction: column; gap: 7px; }
+.field-stack label.toggle-row { flex-direction: row; align-items: center; justify-content: space-between; }
+.field-stack label.toggle-row input { width: 16px; height: 16px; padding: 0; accent-color: var(--purple); }
 .field-stack label > span, .property-row > span { color: #77737d; font-size: 10px; font-weight: 620; }
 .field-stack input, .field-stack textarea, .field-stack select {
   width: 100%;
@@ -670,6 +700,11 @@ html[data-theme="dark"] .export-menu button:hover, html[data-theme="dark"] .sour
 html[data-theme="dark"] .relation-summary { background: #211f25; }
 html[data-theme="dark"] .empty-orbit { background: #3a202b; }
 html[data-theme="dark"] .mermaid-render-error { background: rgb(27 25 31 / 94%); }
+html[data-theme="dark"] .polished-credit { color: #c6a7b4; background: rgb(29 27 34 / 82%); }
+html[data-theme="dark"] .polished-render {
+  --mermade-polished-bg: #1b191f;
+  --mermade-polished-fg: #f5edf1;
+}
 html[data-theme="dark"] .status-dot { box-shadow: 0 0 0 3px #20392e; }
 html[data-theme="dark"] .semantic-line-actions button:last-child:hover { background: #3c2029; }
 html[data-theme="dark"] .inspector-footer > button, html[data-theme="dark"] .repair-error { color: #ff9dbc; background: #3a202b; border-color: #623044; }

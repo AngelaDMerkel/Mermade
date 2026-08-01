@@ -7,7 +7,7 @@ import {
   Check,
   ChevronDown,
   CircleHelp,
-  CircleDot,
+  Diamond,
   Code2,
   Command,
   Copy,
@@ -16,6 +16,7 @@ import {
   Group,
   Link2,
   Maximize2,
+  Minimize2,
   Monitor,
   Moon,
   MousePointer2,
@@ -44,20 +45,118 @@ import {
   useState,
 } from "react";
 import { SemanticVisualEditor } from "./semantic-visual-editor";
+import { DEFAULT_POLISHED_STYLE, normalisePolishedStyle, POLISHED_THEME_OPTIONS, PolishedStyle, PolishedTheme, renderPolishedSvg, supportsPolishedDiagram } from "./beautiful-mermaid";
 import { layoutFlowchart } from "./flowchart-layout";
+import { appendFlowchartStatements, appendFlowchartSubgraph, canUseNativeFlowchartEditor, removeFlowchartItems, updateFlowchartDirection, updateFlowchartEdgeStatement, updateFlowchartNodeStatement, updateFlowchartSubgraphStatement } from "./flowchart-source";
+import { layoutCompatibilityError } from "./layout-compatibility";
 import { flowchartShapePatch, FLOWCHART_SHAPE_GROUPS, FlowchartVisualShape, mermaidShapeClass, selectedFlowchartShape, visualShapeForMermaid } from "./flowchart-shapes";
 import { diagramNameFromFile, MERMAID_IMPORT_ACCEPT, readImportedMermaid } from "./mermaid-import";
 import { helpForDiagram } from "./mermaid-help";
-import { normalizeRenderedSvg, normalizeSvgMarkup } from "./mermaid-rendering";
+import { decorateRenderedStatements, normalizeRenderedSvg, normalizeSvgMarkup } from "./mermaid-rendering";
 import { createRepairProposals, RepairProposal, RepairVersion } from "./mermaid-repair";
 import { applyDiagramStyle, DEFAULT_DIAGRAM_STYLE, DiagramStyle, MermaidLayout, MermaidLook, MermaidTheme, readDiagramStyle } from "./mermaid-style";
 import { detectDiagramType, MERMAID_DIAGRAM_TYPES, visualModeLabel } from "./mermaid-types";
+import { renderUnicodeDiagram } from "./unicode-export";
 
 type NodeShape = FlowchartVisualShape;
 type EdgeStyle = "solid" | "dashed" | "thick";
 type ThemeMode = "light" | "dark" | "system";
 type SupportedMermaidVersion = "11.16.0" | "10.9.6";
 type MermaidVersionPreference = "auto" | SupportedMermaidVersion;
+type CanvasView = "free" | "mermaid" | "polished";
+
+function BeautifulMermaidMark({ size = 14 }: { size?: number }) {
+  return (
+    <svg className="beautiful-mermaid-mark" width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path className="badge-piece badge-piece-top-left" d="M9.75 9.75H2.5V9.5a7 7 0 0 1 7-7h.25z" />
+      <path className="badge-piece badge-piece-top-right" d="M14.25 2.5h7.25v.25a7 7 0 0 1-7 7h-.25z" />
+      <path className="badge-piece badge-piece-bottom-left" d="M9.75 21.5H9.5a7 7 0 0 1-7-7v-.25h7.25z" />
+      <path className="badge-piece badge-piece-bottom-right" d="M14.25 14.25h.25a7 7 0 0 1 7 7v.25h-7.25z" />
+    </svg>
+  );
+}
+
+function OrganiseChartIcon({ size = 19 }: { size?: number }) {
+  return (
+    <svg className="organise-chart-icon" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+      <rect x="9" y="2" width="6" height="5" rx="1" />
+      <path d="M12 7v4H6v5M12 11h6v5" />
+      <rect x="3" y="16" width="6" height="5" rx="1" />
+      <rect x="15" y="16" width="6" height="5" rx="1" />
+    </svg>
+  );
+}
+
+const SOURCE_LINE_SELECTION_PREFIX = "source-line:";
+
+function sourceLineSelection(index: number) {
+  return `${SOURCE_LINE_SELECTION_PREFIX}${index}`;
+}
+
+function sourceLineFromSelection(value: string | undefined) {
+  if (!value?.startsWith(SOURCE_LINE_SELECTION_PREFIX)) return -1;
+  const index = Number(value.slice(SOURCE_LINE_SELECTION_PREFIX.length));
+  return Number.isInteger(index) ? index : -1;
+}
+
+function renderedSelectionId(element: HTMLElement, diagram: Diagram) {
+  const modelId = element.dataset.nodeId || element.dataset.edgeId || element.dataset.groupId;
+  const belongsToModel = Boolean(modelId && (
+    diagram.nodes.some((node) => node.id === modelId)
+    || diagram.edges.some((edge) => edge.id === modelId)
+    || diagram.groups.some((group) => group.id === modelId)
+  ));
+  if (belongsToModel) return modelId;
+  const line = Number(element.dataset.sourceLine);
+  if (element.dataset.sourceLine !== undefined && Number.isInteger(line)) return sourceLineSelection(line);
+  return modelId;
+}
+
+function renderedModelElement(target: Element, diagram: Diagram) {
+  let element: Element | null = target;
+  while (element) {
+    const dataset = (element as HTMLElement).dataset;
+    if (
+      (dataset.nodeId && diagram.nodes.some((node) => node.id === dataset.nodeId))
+      || (dataset.edgeId && diagram.edges.some((edge) => edge.id === dataset.edgeId))
+      || (dataset.groupId && diagram.groups.some((group) => group.id === dataset.groupId))
+    ) return element as HTMLElement;
+    element = element.parentElement;
+  }
+  return null;
+}
+
+function renderedInteractionElement(target: Element, diagram: Diagram) {
+  return renderedModelElement(target, diagram)
+    || target.closest<HTMLElement>("[data-source-line]")
+    || target.closest<HTMLElement>("[data-node-id], [data-edge-id], [data-group-id]");
+}
+
+function toggleRenderedSelection(element: HTMLElement, selected: boolean) {
+  element.classList.toggle("selected", selected);
+  if (!element.dataset.nodeId) return;
+  element.querySelectorAll<SVGElement>(":scope > rect, :scope > circle, :scope > ellipse, :scope > polygon, :scope > path, .label-container").forEach((shape) => {
+    const storedOutline = shape.dataset.mermadeSelectionOutline;
+    if (selected) {
+      if (storedOutline === undefined) {
+        shape.dataset.mermadeSelectionOutline = JSON.stringify([
+          shape.style.getPropertyValue("stroke"),
+          shape.style.getPropertyPriority("stroke"),
+          shape.style.getPropertyValue("stroke-width"),
+          shape.style.getPropertyPriority("stroke-width"),
+        ]);
+      }
+      shape.style.setProperty("stroke", "var(--purple)", "important");
+      shape.style.setProperty("stroke-width", "3.5px", "important");
+      return;
+    }
+    if (storedOutline === undefined) return;
+    const [stroke, strokePriority, strokeWidth, strokeWidthPriority] = JSON.parse(storedOutline) as string[];
+    if (stroke) shape.style.setProperty("stroke", stroke, strokePriority); else shape.style.removeProperty("stroke");
+    if (strokeWidth) shape.style.setProperty("stroke-width", strokeWidth, strokeWidthPriority); else shape.style.removeProperty("stroke-width");
+    delete shape.dataset.mermadeSelectionOutline;
+  });
+}
 
 type EditorPreferences = {
   theme: ThemeMode;
@@ -103,7 +202,7 @@ type PendingViewAnchor = {
   nodeId: string;
   viewportX: number;
   viewportY: number;
-  targetView: "free" | "mermaid";
+  targetView: CanvasView;
 };
 
 type Diagram = {
@@ -112,7 +211,9 @@ type Diagram = {
   source?: string;
   mermaidVersion?: MermaidVersionPreference;
   detectedMermaidVersion?: SupportedMermaidVersion;
+  renderProfile?: "dokuwiki";
   style?: DiagramStyle;
+  polishedStyle?: PolishedStyle;
   nodes: DiagramNode[];
   edges: DiagramEdge[];
   groups: DiagramGroup[];
@@ -123,6 +224,7 @@ const BOARD_WIDTH = 3200;
 const BOARD_HEIGHT = 2200;
 const CANVAS_MARGIN = 700;
 const MIN_ZOOM = 0.25;
+const MIN_FIT_ZOOM = 0.04;
 const MAX_ZOOM = 2.4;
 const GRID_SIZE = 20;
 const LATEST_MERMAID_VERSION: SupportedMermaidVersion = "11.16.0";
@@ -165,7 +267,10 @@ const LAYOUT_CAPABLE_DIAGRAMS = new Set(["flowchart", "state", "class", "er", "r
 
 function layoutOptionsForDiagram(diagramTypeId: string) {
   if (!LAYOUT_CAPABLE_DIAGRAMS.has(diagramTypeId)) return [];
-  return LAYOUT_OPTIONS.filter(({ value }) => value !== "cose-bilkent" || diagramTypeId === "mindmap");
+  return LAYOUT_OPTIONS.filter(({ value }) => (
+    (value !== "cose-bilkent" || diagramTypeId === "mindmap")
+    && (value !== "tidy-tree" || diagramTypeId === "flowchart" || diagramTypeId === "mindmap")
+  ));
 }
 
 function readStoredObject(key: string) {
@@ -202,6 +307,10 @@ const TOUR_STEPS: TourStep[] = [
 
 function clampZoom(value: number) {
   return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value));
+}
+
+function clampFitZoom(value: number) {
+  return Math.min(MAX_ZOOM, Math.max(MIN_FIT_ZOOM, value));
 }
 
 function simpleSourceDiff(before: string, after: string) {
@@ -272,8 +381,9 @@ async function loadMermaid(version: SupportedMermaidVersion, diagramTypeId?: str
   return mermaid;
 }
 
-async function renderMermaidSvg(mermaid: Awaited<ReturnType<typeof loadMermaid>>, id: string, source: string) {
+async function renderMermaidSvg(mermaid: Awaited<ReturnType<typeof loadMermaid>>, id: string, source: string, renderProfileClass = "") {
   const renderContainer = document.createElement("div");
+  renderContainer.className = renderProfileClass;
   renderContainer.style.cssText = "position:fixed;left:-100000px;top:0;visibility:hidden;pointer-events:none";
   document.body.appendChild(renderContainer);
   try {
@@ -341,6 +451,18 @@ function nodeSyntax(node: DiagramNode) {
   }
 }
 
+function edgeSyntax(edge: DiagramEdge) {
+  const link = edge.arrow === false
+    ? (edge.style === "dashed" ? "-.-" : edge.style === "thick" ? "===" : "---")
+    : (edge.style === "dashed" ? "-.->" : edge.style === "thick" ? "==>" : "-->");
+  const label = edge.label ? `|"${safeLabel(edge.label)}"|` : "";
+  return `${edge.from} ${link}${label} ${edge.to}`;
+}
+
+function nodeStyleSyntax(node: DiagramNode) {
+  return `style ${node.id} fill:${node.color},stroke:#77737f,color:${node.textColor},stroke-width:1.5px`;
+}
+
 function toMermaid(diagram: Diagram) {
   const lines = [`flowchart ${diagram.direction}`];
   const grouped = new Set<string>();
@@ -357,16 +479,8 @@ function toMermaid(diagram: Diagram) {
   });
 
   diagram.nodes.filter((node) => !grouped.has(node.id)).forEach((node) => lines.push(`  ${nodeSyntax(node)}`));
-  diagram.edges.forEach((edge) => {
-    const link = edge.arrow === false
-      ? (edge.style === "dashed" ? "-.-" : edge.style === "thick" ? "===" : "---")
-      : (edge.style === "dashed" ? "-.->" : edge.style === "thick" ? "==>" : "-->");
-    const label = edge.label ? `|"${safeLabel(edge.label)}"|` : "";
-    lines.push(`  ${edge.from} ${link}${label} ${edge.to}`);
-  });
-  diagram.nodes.forEach((node) => {
-    lines.push(`  style ${node.id} fill:${node.color},stroke:#77737f,color:${node.textColor},stroke-width:1.5px`);
-  });
+  diagram.edges.forEach((edge) => lines.push(`  ${edgeSyntax(edge)}`));
+  diagram.nodes.forEach((node) => lines.push(`  ${nodeStyleSyntax(node)}`));
   return lines.join("\n");
 }
 
@@ -440,6 +554,43 @@ function parseMermaid(source: string, previous: Diagram): Diagram | null {
     return null;
   };
 
+  const addParsedEdge = (fromExpression: string, connector: string, toExpression: string, label = "") => {
+    const from = parseNode(fromExpression);
+    const targets = toExpression.split(/\s+&\s+/).map((target) => parseNode(target)).filter((id): id is string => Boolean(id));
+    if (!from || !targets.length) return;
+    for (const to of targets) {
+      edges.push({
+        id: `e${edges.length + 1}`,
+        from,
+        to,
+        label,
+        style: connector.startsWith("-.") ? "dashed" : connector.startsWith("==") ? "thick" : "solid",
+        arrow: connector.includes(">"),
+      });
+    }
+  };
+
+  const parseEdgeLine = (line: string) => {
+    const connectorPattern = /\s+(--\s*"([^"]*)"\s*-->|(?:-->|---)\|"?([^|]*?)"?\||-\.->|-\.-|==>|===|-->|---)\s+/g;
+    const connectors = [...line.matchAll(connectorPattern)];
+    if (!connectors.length) return false;
+    const operands: string[] = [];
+    let start = 0;
+    for (const connector of connectors) {
+      operands.push(line.slice(start, connector.index).trim());
+      start = (connector.index || 0) + connector[0].length;
+    }
+    operands.push(line.slice(start).trim());
+    if (operands.length !== connectors.length + 1) return false;
+    connectors.forEach((connector, index) => addParsedEdge(
+      operands[index],
+      connector[1],
+      operands[index + 1],
+      connector[2] || connector[3] || "",
+    ));
+    return true;
+  };
+
   lines.forEach((line) => {
     if (line === header || line.startsWith("%%") || /^direction\s+(LR|RL|TB|TD|BT)$/.test(line)) return;
     const groupMatch = line.match(/^subgraph\s+(\w+)\["?(.*?)"?\]$/);
@@ -457,21 +608,7 @@ function parseMermaid(source: string, previous: Diagram): Diagram | null {
       styles.set(styleMatch[1], { color: styleMatch[2], textColor: styleMatch[3] });
       return;
     }
-    const edgeMatch = line.match(/^(.+?)\s+(-\.->|-\.-|==>|===|-->|---)(?:\|"?(.*?)"?\|)?\s+(.+)$/);
-    if (edgeMatch) {
-      const from = parseNode(edgeMatch[1]);
-      const to = parseNode(edgeMatch[4]);
-      if (!from || !to) return;
-      edges.push({
-        id: `e${edges.length + 1}`,
-        from,
-        to,
-        label: edgeMatch[3] || "",
-        style: edgeMatch[2].startsWith("-.") ? "dashed" : edgeMatch[2].startsWith("==") ? "thick" : "solid",
-        arrow: edgeMatch[2].endsWith(">"),
-      });
-      return;
-    }
+    if (parseEdgeLine(line)) return;
     parseNode(line);
   });
 
@@ -482,10 +619,14 @@ function parseMermaid(source: string, previous: Diagram): Diagram | null {
   });
   const parsedNodes = [...nodes.values()];
   const positions = layoutFlowchart(parsedNodes, edges, direction);
+  const preserveStoredPositions = previous.source === source && previous.nodes.length > 0;
   return {
     ...previous,
     direction,
-    nodes: parsedNodes.map((node) => ({ ...node, ...positions.get(node.id) })),
+    nodes: parsedNodes.map((node) => {
+      const stored = preserveStoredPositions ? previous.nodes.find((candidate) => candidate.id === node.id) : undefined;
+      return { ...node, ...(stored ? { x: stored.x, y: stored.y } : positions.get(node.id)) };
+    }),
     edges,
     groups,
   };
@@ -505,7 +646,7 @@ function IconButton({ label, shortcut, active, disabled, onClick, children, clas
 export function MermaidEditor() {
   const [diagram, setDiagram] = useState<Diagram>(initialDiagram);
   const [selected, setSelected] = useState<string[]>(["approved"]);
-  const [viewMode, setViewMode] = useState<"free" | "mermaid">("mermaid");
+  const [viewMode, setViewMode] = useState<CanvasView>("mermaid");
   const [zoom, setZoom] = useState(0.92);
   const [tool, setTool] = useState<"select" | "connect" | "marquee">("select");
   const [connectionStart, setConnectionStart] = useState<string | null>(null);
@@ -516,6 +657,7 @@ export function MermaidEditor() {
   const [sourcePast, setSourcePast] = useState<string[]>([]);
   const [sourceFuture, setSourceFuture] = useState<string[]>([]);
   const [exportOpen, setExportOpen] = useState(false);
+  const [unicodeExporting, setUnicodeExporting] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -525,9 +667,15 @@ export function MermaidEditor() {
   const [toast, setToast] = useState("");
   const [editingNode, setEditingNode] = useState<string | null>(null);
   const [editingGroup, setEditingGroup] = useState<string | null>(null);
+  const [editingSourceLine, setEditingSourceLine] = useState<number | null>(null);
+  const [editingSourceStatement, setEditingSourceStatement] = useState("");
+  const [editingSourceBusy, setEditingSourceBusy] = useState(false);
   const [mermaidSize, setMermaidSize] = useState({ width: 1200, height: 800 });
   const [mermaidRenderRevision, setMermaidRenderRevision] = useState(0);
   const [mermaidRenderError, setMermaidRenderError] = useState("");
+  const [polishedSize, setPolishedSize] = useState({ width: 1200, height: 800 });
+  const [polishedRenderRevision, setPolishedRenderRevision] = useState(0);
+  const [polishedRenderError, setPolishedRenderError] = useState("");
   const [invalidSource, setInvalidSource] = useState("");
   const [syntaxError, setSyntaxError] = useState("");
   const [repairOpen, setRepairOpen] = useState(false);
@@ -543,6 +691,7 @@ export function MermaidEditor() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const mermaidStageRef = useRef<HTMLDivElement>(null);
   const mermaidViewRef = useRef<HTMLDivElement>(null);
+  const polishedViewRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<null | { startX: number; startY: number; nodes: Map<string, { x: number; y: number }> }>(null);
   const marqueeRef = useRef<MarqueeSelection | null>(null);
   const marqueeSurfaceRef = useRef<HTMLDivElement | null>(null);
@@ -550,6 +699,7 @@ export function MermaidEditor() {
   const mermaidRenderCounter = useRef(0);
   const selectedRef = useRef(selected);
   const shouldFitMermaidRef = useRef(true);
+  const shouldFitPolishedRef = useRef(true);
   const shouldFitFreeformRef = useRef(false);
   const pendingViewAnchorRef = useRef<PendingViewAnchor | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -559,24 +709,40 @@ export function MermaidEditor() {
   const diagramRef = useRef(diagram);
 
   const diagramStyle = diagram.style || DEFAULT_DIAGRAM_STYLE;
-  const source = useMemo(() => applyDiagramStyle(diagram.source ?? toMermaid(diagram), diagram.style || DEFAULT_DIAGRAM_STYLE), [diagram]);
+  const polishedStyle = normalisePolishedStyle(diagram.polishedStyle);
+  const source = useMemo(() => diagram.source ?? applyDiagramStyle(toMermaid(diagram), diagram.style || DEFAULT_DIAGRAM_STYLE), [diagram]);
+  const renderProfileClass = diagram.source && diagram.renderProfile === "dokuwiki" ? "dokuwiki-mermaid" : "";
   const activeDiagramType = useMemo(() => detectDiagramType(source) || MERMAID_DIAGRAM_TYPES[0], [source]);
   const activeHelp = useMemo(() => helpForDiagram(activeDiagramType.id), [activeDiagramType.id]);
   const visualModeName = visualModeLabel(activeDiagramType.family);
+  const polishedSupported = supportsPolishedDiagram(activeDiagramType.id);
+  const renderedSize = viewMode === "polished" ? polishedSize : mermaidSize;
   const visualEditingHelp = activeDiagramType.family === "freeform"
     ? "FreeForm exposes nodes and relationships spatially. Mermaid view remains available for the exact rendered result and source-level control."
     : activeDiagramType.family === "structured"
       ? "Structured editing preserves the ordered statements and interactions that define this diagram. Mermaid view shows the exact rendered result."
       : "Data editing keeps labels, values, axes, and series explicit while Mermaid view shows the exact rendered result.";
-  const nativeFlowchart = activeDiagramType.id === "flowchart" && diagram.source === undefined;
+  const nativeFlowchart = activeDiagramType.id === "flowchart" && diagram.nodes.length > 0;
   const activeMermaidVersion = resolvedMermaidVersion(diagram);
   const modernStyleFeatures = activeMermaidVersion !== "10.9.6";
   const availableLayoutOptions = layoutOptionsForDiagram(activeDiagramType.id);
   const layoutSupported = modernStyleFeatures && LAYOUT_CAPABLE_DIAGRAMS.has(activeDiagramType.id);
+  const currentLayoutCompatibilityError = useMemo(() => layoutCompatibilityError(
+    diagramStyle.layout,
+    activeDiagramType.id,
+    {
+      nodes: diagram.nodes,
+      edges: diagram.edges,
+      groupCount: diagram.groups.length,
+      sourceIsAuthoritative: diagram.source !== undefined,
+    },
+  ), [activeDiagramType.id, diagram.edges, diagram.groups.length, diagram.nodes, diagram.source, diagramStyle.layout]);
   const sourceVersionDetection = useMemo(() => detectMermaidVersion(sourceDraft), [sourceDraft]);
   const selectedNode = selected.length === 1 ? diagram.nodes.find((node) => node.id === selected[0]) : undefined;
   const selectedEdge = selected.length === 1 ? diagram.edges.find((edge) => edge.id === selected[0]) : undefined;
   const selectedGroup = selected.length === 1 ? diagram.groups.find((group) => group.id === selected[0]) : undefined;
+  const selectedSourceLine = sourceLineFromSelection(selected[0]);
+  const selectedSourceStatement = selectedSourceLine >= 0 ? source.split(/\r?\n/)[selectedSourceLine] : undefined;
   const statusSource = invalidSource || source;
   const statusDiagramType = detectDiagramType(statusSource) || activeDiagramType;
   const diagramError = syntaxError || mermaidRenderError;
@@ -620,11 +786,15 @@ export function MermaidEditor() {
     diagramRef.current = diagram;
   }, [diagram]);
 
-  const restoreViewAnchor = useCallback((targetView: "free" | "mermaid") => {
+  const restoreViewAnchor = useCallback((targetView: CanvasView) => {
     const pending = pendingViewAnchorRef.current;
     const scroller = scrollRef.current;
     if (!pending || pending.targetView !== targetView || !scroller) return false;
-    const root = targetView === "free" ? boardRef.current : mermaidViewRef.current;
+    const root = targetView === "free"
+      ? boardRef.current
+      : targetView === "polished"
+        ? polishedViewRef.current
+        : mermaidViewRef.current;
     const element = root?.querySelector<HTMLElement>(`[data-node-id="${CSS.escape(pending.nodeId)}"]`);
     if (!element) return false;
 
@@ -671,7 +841,14 @@ export function MermaidEditor() {
     queueMicrotask(() => {
       if (savedDiagram && Array.isArray(savedDiagram.nodes) && Array.isArray(savedDiagram.edges) && Array.isArray(savedDiagram.groups)) {
         const restored = savedDiagram as unknown as Diagram;
-        setDiagram({ ...restored, style: { ...DEFAULT_DIAGRAM_STYLE, ...(restored.style || {}) } });
+        const restoredFlowchart = restored.source && detectDiagramType(restored.source)?.id === "flowchart"
+          ? parseMermaid(restored.source, restored)
+          : null;
+        setDiagram({
+          ...(restoredFlowchart ? { ...restoredFlowchart, source: restored.source } : restored),
+          style: { ...DEFAULT_DIAGRAM_STYLE, ...(restored.style || {}) },
+          polishedStyle: normalisePolishedStyle(restored.polishedStyle),
+        });
       }
       if (savedPreferences) setPreferences({ ...DEFAULT_PREFERENCES, ...savedPreferences } as EditorPreferences);
       if (showWelcome) setWelcomeOpen(true);
@@ -831,23 +1008,30 @@ export function MermaidEditor() {
     let cancelled = false;
 
     const renderDiagram = async () => {
+      if (currentLayoutCompatibilityError) {
+        host.replaceChildren();
+        setMermaidRenderError(currentLayoutCompatibilityError);
+        return;
+      }
       try {
         const mermaid = await loadMermaid(activeMermaidVersion, activeDiagramType.id, diagramStyle.layout);
         mermaid.initialize({
           startOnLoad: false,
-          theme: "base",
           securityLevel: "strict",
           flowchart: { htmlLabels: true, curve: "basis", useMaxWidth: false },
         });
         const renderId = `mermade-view-${mermaidRenderCounter.current++}`;
         // Use a temporary non-React container. Block Diagram measures live DOM,
         // while its debug serialisation cannot traverse React's circular metadata.
-        const { svg } = await renderMermaidSvg(mermaid, renderId, source);
+        const { svg } = await renderMermaidSvg(mermaid, renderId, source, renderProfileClass);
         if (cancelled) return;
 
         host.innerHTML = svg;
         const svgElement = host.querySelector("svg");
-        if (svgElement) normalizeRenderedSvg(svgElement, activeDiagramType.id, source);
+        if (svgElement) {
+          normalizeRenderedSvg(svgElement, activeDiagramType.id, source);
+          decorateRenderedStatements(svgElement, source);
+        }
         const viewBox = svgElement?.viewBox.baseVal;
         const width = Math.max(480, Math.ceil(viewBox?.width || 1200));
         const height = Math.max(320, Math.ceil(viewBox?.height || 800));
@@ -877,9 +1061,9 @@ export function MermaidEditor() {
           const edge = renderedDiagram.edges[index];
           if (edge) element.dataset.edgeId = edge.id;
         });
-        host.querySelectorAll<HTMLElement>("[data-node-id], [data-edge-id], [data-group-id]").forEach((element) => {
-          const id = element.dataset.nodeId || element.dataset.edgeId || element.dataset.groupId;
-          element.classList.toggle("selected", Boolean(id && selectedRef.current.includes(id)));
+        host.querySelectorAll<HTMLElement>("[data-node-id], [data-edge-id], [data-group-id], [data-source-line]").forEach((element) => {
+          const id = renderedSelectionId(element, diagramRef.current);
+          toggleRenderedSelection(element, Boolean(id && selectedRef.current.includes(id)));
         });
 
         setMermaidSize({ width, height });
@@ -888,7 +1072,7 @@ export function MermaidEditor() {
         if (pendingViewAnchorRef.current?.targetView !== "mermaid" && shouldFitMermaidRef.current && scrollRef.current) {
           shouldFitMermaidRef.current = false;
           const scroller = scrollRef.current;
-          const nextZoom = clampZoom(Math.min(scroller.clientWidth / (width + 180), scroller.clientHeight / (height + 180), 1.35));
+          const nextZoom = clampFitZoom(Math.min(scroller.clientWidth / (width + 180), scroller.clientHeight / (height + 180), 1.35));
           setZoom(nextZoom);
           requestAnimationFrame(() => {
             scroller.scrollLeft = (CANVAS_MARGIN + width / 2) * nextZoom - scroller.clientWidth / 2;
@@ -897,6 +1081,7 @@ export function MermaidEditor() {
         }
       } catch (error) {
         if (cancelled) return;
+        host.replaceChildren();
         setMermaidRenderError(error instanceof Error ? error.message : "Unable to render this Mermaid diagram");
       }
     };
@@ -906,7 +1091,66 @@ export function MermaidEditor() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [activeDiagramType.id, activeMermaidVersion, diagramStyle.layout, restoreViewAnchor, source, viewMode]);
+  }, [activeDiagramType.id, activeMermaidVersion, currentLayoutCompatibilityError, diagramStyle.layout, renderProfileClass, restoreViewAnchor, source, viewMode]);
+
+  useEffect(() => {
+    if (viewMode !== "polished" || !polishedSupported || !polishedViewRef.current) return;
+    const host = polishedViewRef.current;
+    let cancelled = false;
+
+    const renderDiagram = async () => {
+      try {
+        const svg = await renderPolishedSvg(source, polishedStyle);
+        if (cancelled) return;
+
+        host.innerHTML = svg;
+        const svgElement = host.querySelector("svg");
+        if (svgElement) decorateRenderedStatements(svgElement, source);
+        const viewBox = svgElement?.viewBox.baseVal;
+        const width = Math.max(480, Math.ceil(viewBox?.width || 1200));
+        const height = Math.max(320, Math.ceil(viewBox?.height || 800));
+
+        host.querySelectorAll<HTMLElement>(".node[data-id], .class-node[data-id], .entity[data-id], .actor[data-id]").forEach((element) => {
+          if (element.dataset.id) element.dataset.nodeId = element.dataset.id;
+        });
+        host.querySelectorAll<HTMLElement>(".subgraph[data-id]").forEach((element) => {
+          if (element.dataset.id) element.dataset.groupId = element.dataset.id;
+        });
+        host.querySelectorAll<HTMLElement>(".edge").forEach((element, index) => {
+          const edge = diagramRef.current.edges[index];
+          if (edge) element.dataset.edgeId = edge.id;
+        });
+        host.querySelectorAll<HTMLElement>("[data-node-id], [data-edge-id], [data-group-id], [data-source-line]").forEach((element) => {
+          const id = renderedSelectionId(element, diagramRef.current);
+          toggleRenderedSelection(element, Boolean(id && selectedRef.current.includes(id)));
+        });
+
+        setPolishedSize({ width, height });
+        setPolishedRenderRevision((revision) => revision + 1);
+        setPolishedRenderError("");
+        if (pendingViewAnchorRef.current?.targetView !== "polished" && shouldFitPolishedRef.current && scrollRef.current) {
+          shouldFitPolishedRef.current = false;
+          const scroller = scrollRef.current;
+          const nextZoom = clampFitZoom(Math.min(scroller.clientWidth / (width + 180), scroller.clientHeight / (height + 180), 1.35));
+          setZoom(nextZoom);
+          requestAnimationFrame(() => {
+            scroller.scrollLeft = (CANVAS_MARGIN + width / 2) * nextZoom - scroller.clientWidth / 2;
+            scroller.scrollTop = (CANVAS_MARGIN + height / 2) * nextZoom - scroller.clientHeight / 2;
+          });
+        }
+      } catch (error) {
+        if (cancelled) return;
+        host.replaceChildren();
+        setPolishedRenderError(error instanceof Error ? error.message : "Unable to render this diagram in Beautiful view");
+      }
+    };
+
+    const timer = window.setTimeout(() => void renderDiagram(), 60);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [polishedStyle, polishedSupported, source, viewMode]);
 
   useLayoutEffect(() => {
     if (!mermaidRenderRevision || viewMode !== "mermaid" || pendingViewAnchorRef.current?.targetView !== "mermaid") return;
@@ -914,13 +1158,21 @@ export function MermaidEditor() {
     return () => cancelAnimationFrame(frame);
   }, [mermaidRenderRevision, restoreViewAnchor, viewMode]);
 
+  useLayoutEffect(() => {
+    if (!polishedRenderRevision || viewMode !== "polished" || pendingViewAnchorRef.current?.targetView !== "polished") return;
+    const frame = requestAnimationFrame(() => restoreViewAnchor("polished"));
+    return () => cancelAnimationFrame(frame);
+  }, [polishedRenderRevision, restoreViewAnchor, viewMode]);
+
   useEffect(() => {
-    if (viewMode !== "mermaid" || !mermaidViewRef.current) return;
-    mermaidViewRef.current.querySelectorAll<HTMLElement>("[data-node-id], [data-edge-id], [data-group-id]").forEach((element) => {
-      const id = element.dataset.nodeId || element.dataset.edgeId || element.dataset.groupId;
-      element.classList.toggle("selected", Boolean(id && selected.includes(id)));
+    if (viewMode === "free") return;
+    const host = viewMode === "polished" ? polishedViewRef.current : mermaidViewRef.current;
+    if (!host) return;
+    host.querySelectorAll<HTMLElement>("[data-node-id], [data-edge-id], [data-group-id], [data-source-line]").forEach((element) => {
+      const id = renderedSelectionId(element, diagramRef.current);
+      toggleRenderedSelection(element, Boolean(id && selected.includes(id)));
     });
-  }, [mermaidSize, selected, viewMode]);
+  }, [mermaidSize, polishedSize, selected, viewMode]);
 
   useEffect(() => {
     if (viewMode !== "free" || pendingViewAnchorRef.current?.targetView !== "free") return;
@@ -973,21 +1225,51 @@ export function MermaidEditor() {
   }, [zoom]);
 
   const updateNode = (id: string, patch: Partial<DiagramNode>, save = true) => {
-    const apply = (current: Diagram) => ({ ...current, nodes: current.nodes.map((node) => node.id === id ? { ...node, ...patch } : node) });
+    const apply = (current: Diagram) => {
+      const nodes = current.nodes.map((node) => node.id === id ? { ...node, ...patch } : node);
+      const updated = nodes.find((node) => node.id === id);
+      return {
+        ...current,
+        nodes,
+        source: current.source && updated
+          ? updateFlowchartNodeStatement(current.source, id, nodeSyntax(updated), nodeStyleSyntax(updated))
+          : current.source,
+      };
+    };
     if (save) commit(apply); else setDiagram(apply);
   };
 
   const updateEdge = (id: string, patch: Partial<DiagramEdge>, save = true) => {
-    const apply = (current: Diagram) => ({ ...current, edges: current.edges.map((edge) => edge.id === id ? { ...edge, ...patch } : edge) });
+    const apply = (current: Diagram) => {
+      const previous = current.edges.find((edge) => edge.id === id);
+      const edges = current.edges.map((edge) => edge.id === id ? { ...edge, ...patch } : edge);
+      const updated = edges.find((edge) => edge.id === id);
+      return {
+        ...current,
+        edges,
+        source: current.source && previous && updated
+          ? updateFlowchartEdgeStatement(current.source, previous.from, previous.to, edgeSyntax(updated))
+          : current.source,
+      };
+    };
     if (save) commit(apply); else setDiagram(apply);
   };
 
-  const addNode = (shape: NodeShape = "rectangle", connectFromSelection = false) => {
+  const updateGroup = (id: string, label: string, save = true) => {
+    const apply = (current: Diagram) => ({
+      ...current,
+      groups: current.groups.map((group) => group.id === id ? { ...group, label } : group),
+      source: current.source ? updateFlowchartSubgraphStatement(current.source, id, label) : current.source,
+    });
+    if (save) commit(apply); else setDiagram(apply);
+  };
+
+  const addNode = (shape: NodeShape = "rectangle", connectFromSelection = false, connectedShortcut = "Shift+N") => {
     const origin = connectFromSelection && selected.length === 1
       ? diagram.nodes.find((node) => node.id === selected[0])
       : undefined;
     if (connectFromSelection && !origin) {
-      notify("Select one node before using Shift+N");
+      notify(`Select one node before using ${connectedShortcut}`);
       return;
     }
 
@@ -1009,22 +1291,51 @@ export function MermaidEditor() {
     const edge: DiagramEdge | undefined = origin
       ? { id: `e${edgeCounter.current++}`, from: origin.id, to: id, label: "", style: "solid" }
       : undefined;
-    commit((current) => ({ ...current, nodes: [...current.nodes, node], edges: edge ? [...current.edges, edge] : current.edges }));
+    commit((current) => ({
+      ...current,
+      nodes: [...current.nodes, node],
+      edges: edge ? [...current.edges, edge] : current.edges,
+      source: current.source
+        ? appendFlowchartStatements(current.source, [nodeSyntax(node), nodeStyleSyntax(node), ...(edge ? [edgeSyntax(edge)] : [])])
+        : current.source,
+    }));
     setSelected([id]);
     setEditingNode(id);
     if (edge) notify("Connected step created");
   };
 
-  const deleteSelected = () => {
+  const deleteSelected = async () => {
     if (!selected.length) return;
     const ids = new Set(selected);
+    const nodeIds = diagram.nodes.filter((node) => ids.has(node.id)).map((node) => node.id);
+    const selectedEdges = diagram.edges.filter((edge) => ids.has(edge.id));
+    const subgraphIds = diagram.groups.filter((group) => ids.has(group.id)).map((group) => group.id);
+    const sourceLines = selected.map(sourceLineFromSelection).filter((line) => line >= 0);
+    let candidate = diagram.source;
+    if (candidate !== undefined && sourceLines.length) {
+      const removedLines = new Set(sourceLines);
+      candidate = candidate.split(/\r?\n/).filter((_, index) => !removedLines.has(index)).join("\n");
+    }
+    if (candidate !== undefined) {
+      candidate = removeFlowchartItems(candidate, { nodeIds, edges: selectedEdges, subgraphIds });
+      const error = await validateSource(candidate, activeMermaidVersion);
+      if (error) {
+        notify(`Mermaid could not safely delete that selection: ${error}`);
+        return;
+      }
+    }
+
     commit((current) => ({
       ...current,
-      nodes: current.nodes.filter((node) => !ids.has(node.id)),
       edges: current.edges.filter((edge) => !ids.has(edge.id) && !ids.has(edge.from) && !ids.has(edge.to)),
       groups: current.groups.filter((group) => !ids.has(group.id)),
+      source: candidate,
+      nodes: current.nodes
+        .filter((node) => !ids.has(node.id))
+        .map((node) => node.groupId && ids.has(node.groupId) ? { ...node, groupId: undefined } : node),
     }));
     setSelected([]);
+    notify("Selection deleted from the canvas and Mermaid source");
   };
 
   const groupSelected = () => {
@@ -1038,6 +1349,7 @@ export function MermaidEditor() {
       ...current,
       groups: [...current.groups, { id, label: "New subgraph" }],
       nodes: current.nodes.map((node) => nodeIds.includes(node.id) ? { ...node, groupId: id } : node),
+      source: current.source ? appendFlowchartSubgraph(current.source, id, "New subgraph", nodeIds) : current.source,
     }));
     setSelected([id]);
     notify("Subgraph created");
@@ -1101,12 +1413,12 @@ export function MermaidEditor() {
       return;
     }
 
-    if (viewMode === "mermaid") {
-      const nextZoom = clampZoom(Math.min(scroller.clientWidth / (mermaidSize.width + 180), scroller.clientHeight / (mermaidSize.height + 180), 1.35));
+    if (viewMode !== "free") {
+      const nextZoom = clampFitZoom(Math.min(scroller.clientWidth / (renderedSize.width + 180), scroller.clientHeight / (renderedSize.height + 180), 1.35));
       setZoom(nextZoom);
       requestAnimationFrame(() => {
-        scroller.scrollLeft = (CANVAS_MARGIN + mermaidSize.width / 2) * nextZoom - scroller.clientWidth / 2;
-        scroller.scrollTop = (CANVAS_MARGIN + mermaidSize.height / 2) * nextZoom - scroller.clientHeight / 2;
+        scroller.scrollLeft = (CANVAS_MARGIN + renderedSize.width / 2) * nextZoom - scroller.clientWidth / 2;
+        scroller.scrollTop = (CANVAS_MARGIN + renderedSize.height / 2) * nextZoom - scroller.clientHeight / 2;
       });
       return;
     }
@@ -1124,6 +1436,58 @@ export function MermaidEditor() {
       scroller.scrollLeft = (CANVAS_MARGIN + centerX) * nextZoom - scroller.clientWidth / 2;
       scroller.scrollTop = (CANVAS_MARGIN + centerY) * nextZoom - scroller.clientHeight / 2;
     });
+  };
+
+  const fillView = () => {
+    const scroller = scrollRef.current;
+    if (!scroller || (viewMode === "free" && !diagram.nodes.length)) {
+      setZoom(1);
+      return;
+    }
+
+    if (viewMode !== "free") {
+      const nextZoom = clampFitZoom(Math.min(scroller.clientWidth / (renderedSize.width + 120), MAX_ZOOM));
+      setZoom(nextZoom);
+      requestAnimationFrame(() => {
+        scroller.scrollLeft = (CANVAS_MARGIN + renderedSize.width / 2) * nextZoom - scroller.clientWidth / 2;
+        scroller.scrollTop = (CANVAS_MARGIN + renderedSize.height / 2) * nextZoom - scroller.clientHeight / 2;
+      });
+      return;
+    }
+
+    const minX = Math.min(...diagram.nodes.map((node) => node.x)) - 60;
+    const minY = Math.min(...diagram.nodes.map((node) => node.y)) - 60;
+    const maxX = Math.max(...diagram.nodes.map((node) => node.x + node.width)) + 60;
+    const maxY = Math.max(...diagram.nodes.map((node) => node.y + node.height)) + 60;
+    const nextZoom = clampFitZoom(Math.min(scroller.clientWidth / (maxX - minX), MAX_ZOOM));
+
+    setZoom(nextZoom);
+    requestAnimationFrame(() => {
+      scroller.scrollLeft = (CANVAS_MARGIN + (minX + maxX) / 2) * nextZoom - scroller.clientWidth / 2;
+      scroller.scrollTop = (CANVAS_MARGIN + (minY + maxY) / 2) * nextZoom - scroller.clientHeight / 2;
+    });
+  };
+
+  const editSelectedText = () => {
+    if (selected.length !== 1) {
+      notify("Select one node to edit its text");
+      return;
+    }
+    const node = diagram.nodes.find((candidate) => candidate.id === selected[0]);
+    if (node) {
+      setEditingGroup(null);
+      setEditingSourceLine(null);
+      setEditingNode(node.id);
+      return;
+    }
+    if (viewMode !== "free" && selectedSourceStatement !== undefined) {
+      setEditingNode(null);
+      setEditingGroup(null);
+      setEditingSourceLine(selectedSourceLine);
+      setEditingSourceStatement(selectedSourceStatement);
+      return;
+    }
+    notify("Select one node to edit its text");
   };
 
   useEffect(() => {
@@ -1157,11 +1521,23 @@ export function MermaidEditor() {
         }
         setEditingNode(null);
         setEditingGroup(null);
+        setEditingSourceLine(null);
         setConnectionStart(null);
         setTool("select");
         return;
       }
       if (editing || event.metaKey || event.ctrlKey || event.altKey || event.repeat) return;
+
+      if (key === "e") {
+        event.preventDefault();
+        editSelectedText();
+        return;
+      }
+      if (key === "1" || key === "2" || key === "3") {
+        event.preventDefault();
+        switchCanvasView(key === "1" ? "free" : key === "2" ? "mermaid" : "polished");
+        return;
+      }
 
       if (!nativeFlowchart && ["n", "v", "l", "s", "d", "m"].includes(key)) {
         event.preventDefault();
@@ -1171,7 +1547,7 @@ export function MermaidEditor() {
 
       if (event.key === "Backspace" || event.key === "Delete") {
         event.preventDefault();
-        deleteSelected();
+        void deleteSelected();
       } else if (key === "n") {
         event.preventDefault();
         addNode("rectangle", event.shiftKey);
@@ -1189,7 +1565,7 @@ export function MermaidEditor() {
         groupSelected();
       } else if (key === "d") {
         event.preventDefault();
-        addNode("diamond");
+        addNode("diamond", event.shiftKey, "Shift+D");
       } else if (key === "m") {
         event.preventDefault();
         setTool("marquee");
@@ -1197,7 +1573,7 @@ export function MermaidEditor() {
         notify("Drag across the canvas to select nodes");
       } else if (key === "f") {
         event.preventDefault();
-        fitView();
+        if (event.shiftKey) fillView(); else fitView();
       } else if (key === "o") {
         event.preventDefault();
         if (nativeFlowchart) organizeFlowchart();
@@ -1214,14 +1590,15 @@ export function MermaidEditor() {
       ...current,
       nodes: current.nodes.map((node) => node.groupId && groupIds.has(node.groupId) ? { ...node, groupId: undefined } : node),
       groups: current.groups.filter((group) => !groupIds.has(group.id)),
+      source: current.source ? removeFlowchartItems(current.source, { subgraphIds: groupIds }) : current.source,
     }));
     setSelected([]);
   };
 
   const beginCanvasPointer = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!nativeFlowchart || event.button !== 0 || tool === "connect") return;
-    if (viewMode === "mermaid" && tool !== "marquee") return;
-    const selectionSurface = viewMode === "mermaid" ? mermaidStageRef.current : boardRef.current;
+    if (viewMode !== "free" && tool !== "marquee") return;
+    const selectionSurface = viewMode !== "free" ? mermaidStageRef.current : boardRef.current;
     if (!selectionSurface) return;
     if (tool === "marquee") event.preventDefault();
     const rect = selectionSurface.getBoundingClientRect();
@@ -1258,7 +1635,11 @@ export function MermaidEditor() {
       notify("Choose the destination node");
     } else if (connectionStart !== id) {
       const newEdge: DiagramEdge = { id: `e${edgeCounter.current++}`, from: connectionStart, to: id, label: "", style: "solid" };
-      commit((current) => ({ ...current, edges: [...current.edges, newEdge] }));
+      commit((current) => ({
+        ...current,
+        edges: [...current.edges, newEdge],
+        source: current.source ? appendFlowchartStatements(current.source, [edgeSyntax(newEdge)]) : current.source,
+      }));
       setConnectionStart(null);
       setTool("select");
       setSelected([newEdge.id]);
@@ -1282,39 +1663,62 @@ export function MermaidEditor() {
   };
 
   const selectMermaidElement = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (tool === "marquee") return;
-    const element = (event.target as Element).closest<HTMLElement>("[data-node-id], [data-edge-id], [data-group-id]");
+    if (tool === "marquee" && nativeFlowchart) return;
+    const element = renderedInteractionElement(event.target as Element, diagram);
     if (!element) {
       setSelected([]);
       setEditingNode(null);
       setEditingGroup(null);
+      setEditingSourceLine(null);
       return;
     }
     event.stopPropagation();
     const nodeId = element.dataset.nodeId;
-    if (tool === "connect" && nodeId) {
+    if (tool === "connect" && nodeId && diagram.nodes.some((node) => node.id === nodeId)) {
       connectNode(nodeId);
       return;
     }
-    const id = nodeId || element.dataset.edgeId || element.dataset.groupId;
+    const id = renderedSelectionId(element, diagram);
     if (!id) return;
     setSelected(event.shiftKey ? (selected.includes(id) ? selected.filter((value) => value !== id) : [...selected, id]) : [id]);
   };
 
   const editMermaidElement = (event: React.MouseEvent<HTMLDivElement>) => {
-    const element = (event.target as Element).closest<HTMLElement>("[data-node-id], [data-group-id]");
+    const element = renderedInteractionElement(event.target as Element, diagram);
+    if (!element) {
+      event.stopPropagation();
+      openSourceEditor();
+      return;
+    }
     const nodeId = element?.dataset.nodeId;
     const groupId = element?.dataset.groupId;
-    if (!nodeId && !groupId) return;
+    const sourceLine = Number(element?.dataset.sourceLine);
+    const modelNode = nodeId ? diagram.nodes.find((node) => node.id === nodeId) : undefined;
+    const modelGroup = groupId ? diagram.groups.find((group) => group.id === groupId) : undefined;
+    if (!modelNode && !modelGroup && (element.dataset.sourceLine === undefined || !Number.isInteger(sourceLine))) {
+      event.stopPropagation();
+      openSourceEditor();
+      return;
+    }
     event.stopPropagation();
-    if (nodeId) {
-      setSelected([nodeId]);
-      setEditingNode(nodeId);
+    if (modelNode) {
+      setSelected([modelNode.id]);
+      setEditingNode(modelNode.id);
       setEditingGroup(null);
-    } else if (groupId) {
-      setSelected([groupId]);
-      setEditingGroup(groupId);
+      setEditingSourceLine(null);
+    } else if (modelGroup) {
+      setSelected([modelGroup.id]);
+      setEditingGroup(modelGroup.id);
       setEditingNode(null);
+      setEditingSourceLine(null);
+    } else {
+      const statement = source.split(/\r?\n/)[sourceLine];
+      if (statement === undefined) return;
+      setSelected([sourceLineSelection(sourceLine)]);
+      setEditingNode(null);
+      setEditingGroup(null);
+      setEditingSourceLine(sourceLine);
+      setEditingSourceStatement(statement);
     }
   };
 
@@ -1355,15 +1759,18 @@ export function MermaidEditor() {
     const anchor = document.createElement("a");
     anchor.href = url;
     anchor.download = filename;
+    anchor.hidden = true;
+    document.body.appendChild(anchor);
     anchor.click();
-    URL.revokeObjectURL(url);
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
   };
 
   const exportSvg = async () => {
     try {
       const mermaid = await loadMermaid(activeMermaidVersion, activeDiagramType.id, diagramStyle.layout);
-      mermaid.initialize({ startOnLoad: false, theme: "base", securityLevel: "strict", flowchart: { htmlLabels: true, curve: "basis" } });
-      const { svg } = await renderMermaidSvg(mermaid, `mermade-${Date.now()}`, source);
+      mermaid.initialize({ startOnLoad: false, securityLevel: "strict", flowchart: { htmlLabels: true, curve: "basis" } });
+      const { svg } = await renderMermaidSvg(mermaid, `mermade-${Date.now()}`, source, renderProfileClass);
       download(normalizeSvgMarkup(svg, activeDiagramType.id, source), `${diagram.name.toLowerCase().replace(/\W+/g, "-")}.svg`, "image/svg+xml");
       setExportOpen(false);
       notify("SVG exported");
@@ -1372,7 +1779,34 @@ export function MermaidEditor() {
     }
   };
 
-  const validateSource = async (candidate: string, version: SupportedMermaidVersion) => {
+  const exportPolishedSvg = async () => {
+    if (!polishedSupported) return;
+    try {
+      const svg = await renderPolishedSvg(source, polishedStyle);
+      download(svg, `${diagram.name.toLowerCase().replace(/\W+/g, "-")}-beautiful.svg`, "image/svg+xml");
+      setExportOpen(false);
+      notify("Beautiful SVG exported");
+    } catch (error) {
+      notify(error instanceof Error ? `Beautiful export failed: ${error.message}` : "Beautiful export failed");
+    }
+  };
+
+  const exportPolishedText = async () => {
+    if (!polishedSupported || unicodeExporting) return;
+    setUnicodeExporting(true);
+    try {
+      const result = await renderUnicodeDiagram(source);
+      download(`\uFEFF${result.content}`, `${diagram.name.toLowerCase().replace(/\W+/g, "-")}.txt`, "text/plain;charset=utf-8");
+      setExportOpen(false);
+      notify(result.simplified ? "Large diagram exported as a Unicode relationship map" : "Unicode diagram exported");
+    } catch (error) {
+      notify(error instanceof Error ? `Unicode export failed: ${error.message}` : "Unicode export failed");
+    } finally {
+      setUnicodeExporting(false);
+    }
+  };
+
+  async function validateSource(candidate: string, version: SupportedMermaidVersion) {
     try {
       const candidateType = detectDiagramType(candidate);
       const candidateStyle = readDiagramStyle(candidate);
@@ -1383,7 +1817,7 @@ export function MermaidEditor() {
     } catch (error) {
       return error instanceof Error ? error.message : "Mermaid rejected this source";
     }
-  };
+  }
 
   const validateAndCommitSource = async (candidate: string, versionOverride?: SupportedMermaidVersion) => {
     const detection = detectMermaidVersion(candidate);
@@ -1406,11 +1840,19 @@ export function MermaidEditor() {
       await mermaid.parse(candidate);
 
       const parsedFlowchart = detectedType.id === "flowchart" ? parseMermaid(candidate, diagram) : null;
+      const preserveFlowchartSource = Boolean(parsedFlowchart && !canUseNativeFlowchartEditor(candidate));
       if (parsedFlowchart) shouldFitFreeformRef.current = true;
+      shouldFitMermaidRef.current = true;
+      shouldFitPolishedRef.current = true;
+      setTool("select");
+      setConnectionStart(null);
+      setEditingNode(null);
+      setEditingGroup(null);
+      setEditingSourceLine(null);
       commit((current) => parsedFlowchart ? {
         ...parsedFlowchart,
         name: current.name,
-        source: undefined,
+        source: preserveFlowchartSource ? candidate : undefined,
         style: nextStyle,
         mermaidVersion: versionOverride || current.mermaidVersion,
         detectedMermaidVersion: detection.recommended,
@@ -1427,11 +1869,30 @@ export function MermaidEditor() {
       setSelected([]);
       setInvalidSource("");
       setSyntaxError("");
-      shouldFitMermaidRef.current = true;
+      if (viewMode === "polished" && !supportsPolishedDiagram(detectedType.id)) setViewMode("mermaid");
       return { ok: true };
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : "Mermaid rejected this source" };
     }
+  };
+
+  const applyRenderedStatementEdit = async () => {
+    if (editingSourceLine === null) return;
+    const lines = source.split(/\r?\n/);
+    if (lines[editingSourceLine] === undefined) {
+      setEditingSourceLine(null);
+      return;
+    }
+    lines[editingSourceLine] = editingSourceStatement;
+    setEditingSourceBusy(true);
+    const result = await validateAndCommitSource(lines.join("\n"));
+    setEditingSourceBusy(false);
+    if (!result.ok) {
+      notify(result.error || "Mermaid rejected this statement");
+      return;
+    }
+    setEditingSourceLine(null);
+    notify("Mermaid statement updated");
   };
 
   const applySource = async () => {
@@ -1451,6 +1912,18 @@ export function MermaidEditor() {
   };
 
   const updateDiagramStyle = (patch: Partial<DiagramStyle>) => {
+    if (patch.layout) {
+      const compatibilityError = layoutCompatibilityError(patch.layout, activeDiagramType.id, {
+        nodes: diagram.nodes,
+        edges: diagram.edges,
+        groupCount: diagram.groups.length,
+        sourceIsAuthoritative: diagram.source !== undefined,
+      });
+      if (compatibilityError) {
+        notify(compatibilityError);
+        return;
+      }
+    }
     commit((current) => {
       const nextStyle = { ...(current.style || DEFAULT_DIAGRAM_STYLE), ...patch };
       return {
@@ -1460,6 +1933,18 @@ export function MermaidEditor() {
       };
     });
     shouldFitMermaidRef.current = Boolean(patch.layout || patch.look);
+  };
+
+  const updatePolishedStyle = (patch: Partial<PolishedStyle>) => {
+    commit((current) => ({
+      ...current,
+      polishedStyle: {
+        ...normalisePolishedStyle(current.polishedStyle),
+        ...patch,
+      },
+    }));
+    shouldFitPolishedRef.current = ["padding", "nodeSpacing", "layerSpacing", "componentSpacing"]
+      .some((key) => key in patch);
   };
 
   const openRepairOptions = async () => {
@@ -1528,7 +2013,7 @@ export function MermaidEditor() {
         return;
       }
 
-      setDiagram((current) => ({ ...current, name: diagramNameFromFile(file.name) }));
+      setDiagram((current) => ({ ...current, name: diagramNameFromFile(file.name), renderProfile: imported.renderProfile }));
       setSourceDraft(imported.source);
       setSourceDirty(false);
       setSourceOpen(false);
@@ -1567,10 +2052,32 @@ export function MermaidEditor() {
     setDiagram((current) => ({ ...current, mermaidVersion: preference }));
   };
 
-  const switchCanvasView = (targetView: "free" | "mermaid") => {
+  const changeFlowchartDirection = (direction: "LR" | "TB") => {
+    shouldFitFreeformRef.current = true;
+    commit((current) => {
+      const positions = layoutFlowchart(current.nodes, current.edges, direction);
+      return {
+        ...current,
+        direction,
+        nodes: current.nodes.map((node) => ({ ...node, ...positions.get(node.id) })),
+        source: current.source ? updateFlowchartDirection(current.source, direction) : current.source,
+      };
+    });
+    shouldFitMermaidRef.current = true;
+  };
+
+  function switchCanvasView(targetView: CanvasView) {
     if (targetView === viewMode) return;
+    if (targetView === "polished" && !polishedSupported) {
+      notify(`${activeDiagramType.label} is not yet supported by Beautiful Mermaid`);
+      return;
+    }
     const scroller = scrollRef.current;
-    const root = viewMode === "free" ? boardRef.current : mermaidViewRef.current;
+    const root = viewMode === "free"
+      ? boardRef.current
+      : viewMode === "polished"
+        ? polishedViewRef.current
+        : mermaidViewRef.current;
     if (scroller && root) {
       const scrollerRect = scroller.getBoundingClientRect();
       const candidates = [...root.querySelectorAll<HTMLElement>("[data-node-id]")];
@@ -1598,9 +2105,10 @@ export function MermaidEditor() {
       }
     }
     if (targetView === "mermaid") shouldFitMermaidRef.current = false;
+    if (targetView === "polished") shouldFitPolishedRef.current = false;
     if (targetView === "free") shouldFitFreeformRef.current = false;
     setViewMode(targetView);
-  };
+  }
 
   const zoomAtViewportCenter = (nextValue: number) => {
     const scroller = scrollRef.current;
@@ -1642,7 +2150,9 @@ export function MermaidEditor() {
               <div className="export-menu">
                 <button type="button" onClick={copySource}><Copy size={16} /><span><b>Copy Mermaid</b><small>Paste into Markdown</small></span></button>
                 <button type="button" onClick={() => { download(source, `${diagram.name}.mmd`, "text/plain"); setExportOpen(false); }}><Code2 size={16} /><span><b>Mermaid file</b><small>Download .mmd source</small></span></button>
-                <button type="button" onClick={exportSvg}><ExternalLink size={16} /><span><b>Vector image</b><small>Download SVG</small></span></button>
+                <button type="button" onClick={exportSvg}><ExternalLink size={16} /><span><b>Mermaid vector</b><small>Download Mermaid SVG</small></span></button>
+                {polishedSupported && <button type="button" onClick={exportPolishedSvg}><BeautifulMermaidMark size={16} /><span><b>Beautiful vector</b><small>Download Beautiful Mermaid SVG</small></span></button>}
+                {polishedSupported && <button type="button" disabled={unicodeExporting} onClick={exportPolishedText}><Code2 size={16} /><span><b>{unicodeExporting ? "Preparing Unicode…" : "Unicode diagram"}</b><small>{unicodeExporting ? "Rendering away from the canvas" : "Download a text rendering"}</small></span></button>}
               </div>
             )}
           </div>
@@ -1660,9 +2170,10 @@ export function MermaidEditor() {
           </div>
           <div className="tool-separator" />
           <div className="tool-group">
-            <IconButton label="Add decision (D)" shortcut="D" disabled={!nativeFlowchart} onClick={() => addNode("diamond")}><CircleDot size={19} /></IconButton>
-            <IconButton label="Fit chart (F)" shortcut="F" onClick={fitView}><Maximize2 size={19} /></IconButton>
-            <IconButton label="Organise chart (O)" shortcut="O" disabled={!nativeFlowchart} onClick={organizeFlowchart}><Workflow size={19} /></IconButton>
+            <IconButton label="Add decision (D)" shortcut="D" disabled={!nativeFlowchart} onClick={() => addNode("diamond")}><Diamond size={19} /></IconButton>
+            <IconButton label="Fit chart (F)" shortcut="F" onClick={fitView}><Minimize2 size={19} /></IconButton>
+            <IconButton label="Fill chart (Shift+F)" shortcut="⇧F" onClick={fillView}><Maximize2 size={19} /></IconButton>
+            <IconButton label="Organise chart (O)" shortcut="O" disabled={!nativeFlowchart} onClick={organizeFlowchart}><OrganiseChartIcon /></IconButton>
           </div>
           <div className="rail-spacer" />
           <div className="rail-help-stack" data-tour="help-settings">
@@ -1703,12 +2214,21 @@ export function MermaidEditor() {
             </div>
             <div className="canvas-view-controls" data-tour="canvas-views" onPointerDown={(event) => event.stopPropagation()}>
               {nativeFlowchart && <div className="direction-switch" aria-label="Chart direction">
-                <button className={diagram.direction === "LR" ? "active" : ""} type="button" onClick={(event) => { event.stopPropagation(); commit((current) => ({ ...current, direction: "LR" })); }}>Left → right</button>
-                <button className={diagram.direction === "TB" ? "active" : ""} type="button" onClick={(event) => { event.stopPropagation(); commit((current) => ({ ...current, direction: "TB" })); }}>Top ↓ bottom</button>
+                <button className={diagram.direction === "LR" ? "active" : ""} type="button" onClick={(event) => { event.stopPropagation(); changeFlowchartDirection("LR"); }}>Left → right</button>
+                <button className={diagram.direction === "TB" ? "active" : ""} type="button" onClick={(event) => { event.stopPropagation(); changeFlowchartDirection("TB"); }}>Top ↓ bottom</button>
               </div>}
               <div className="view-switch" aria-label="Canvas view">
-                <button className={viewMode === "free" ? "active" : ""} type="button" onClick={(event) => { event.stopPropagation(); switchCanvasView("free"); }}><MousePointer2 size={12} /> {visualModeName}</button>
-                <button className={viewMode === "mermaid" ? "active" : ""} type="button" onClick={(event) => { event.stopPropagation(); switchCanvasView("mermaid"); }}><Sparkles size={12} /> Mermaid</button>
+                <button className={viewMode === "free" ? "active" : ""} type="button" aria-keyshortcuts="1" title={`${visualModeName} canvas (1)`} onClick={(event) => { event.stopPropagation(); switchCanvasView("free"); }}><MousePointer2 size={12} /> {visualModeName}</button>
+                <button className={viewMode === "mermaid" ? "active" : ""} type="button" aria-keyshortcuts="2" title="Mermaid canvas (2)" onClick={(event) => { event.stopPropagation(); switchCanvasView("mermaid"); }}><Sparkles size={12} /> Mermaid</button>
+                <button
+                  className={viewMode === "polished" ? "active" : ""}
+                  type="button"
+                  disabled={!polishedSupported}
+                  aria-keyshortcuts="3"
+                  aria-label={polishedSupported ? "Beautiful canvas" : `Beautiful canvas is not available for ${activeDiagramType.label}`}
+                  title={polishedSupported ? "Beautiful canvas (3) · Presentation rendering by Beautiful Mermaid" : `Beautiful Mermaid does not yet support ${activeDiagramType.label}`}
+                  onClick={(event) => { event.stopPropagation(); switchCanvasView("polished"); }}
+                ><BeautifulMermaidMark size={12} /> Beautiful</button>
               </div>
             </div>
           </div>
@@ -1719,8 +2239,8 @@ export function MermaidEditor() {
               className={`diagram-surface ${preferences.showGrid ? "" : "hide-grid"}`}
               onPointerDown={beginCanvasPointer}
               style={{
-                width: ((viewMode === "free" ? BOARD_WIDTH : mermaidSize.width) + CANVAS_MARGIN * 2) * zoom,
-                height: ((viewMode === "free" ? BOARD_HEIGHT : mermaidSize.height) + CANVAS_MARGIN * 2) * zoom,
+                width: ((viewMode === "free" ? BOARD_WIDTH : renderedSize.width) + CANVAS_MARGIN * 2) * zoom,
+                height: ((viewMode === "free" ? BOARD_HEIGHT : renderedSize.height) + CANVAS_MARGIN * 2) * zoom,
                 "--grid-size": `${20 * zoom}px`,
               } as React.CSSProperties}
             >
@@ -1793,12 +2313,14 @@ export function MermaidEditor() {
             ) : (
               <div
                 ref={mermaidStageRef}
-                className="mermaid-stage"
-                style={{ left: CANVAS_MARGIN * zoom, top: CANVAS_MARGIN * zoom, width: mermaidSize.width, height: mermaidSize.height, transform: `scale(${zoom})` }}
+                className={`mermaid-stage ${viewMode === "polished" ? "polished-stage" : ""}`}
+                style={{ left: CANVAS_MARGIN * zoom, top: CANVAS_MARGIN * zoom, width: renderedSize.width, height: renderedSize.height, transform: `scale(${zoom})` }}
                 onPointerDown={selectMermaidElement}
                 onDoubleClick={editMermaidElement}
               >
-                <div ref={mermaidViewRef} className="mermaid-render" />
+                {viewMode === "polished"
+                  ? <div ref={polishedViewRef} className="mermaid-render polished-render" />
+                  : <div ref={mermaidViewRef} className={`mermaid-render ${renderProfileClass}`} />}
                 {marquee && (
                   <div
                     className="marquee-selection"
@@ -1810,13 +2332,15 @@ export function MermaidEditor() {
                     }}
                   />
                 )}
-                {mermaidRenderError && <div className="mermaid-render-error"><Code2 size={20} /><b>Mermaid could not render this diagram</b><span>{mermaidRenderError}</span></div>}
+                {viewMode === "mermaid" && mermaidRenderError && <div className="mermaid-render-error"><Code2 size={20} /><b>Mermaid could not render this diagram</b><span>{mermaidRenderError}</span></div>}
+                {viewMode === "polished" && polishedRenderError && <div className="mermaid-render-error"><BeautifulMermaidMark size={20} /><b>Beautiful view could not render this valid Mermaid diagram</b><span>{polishedRenderError}</span></div>}
+                {viewMode === "polished" && !polishedRenderError && <div className="polished-credit"><BeautifulMermaidMark size={12} /> Beautiful Mermaid renderer</div>}
               </div>
             )}
             </div>
           </div>}
 
-          {viewMode === "mermaid" && editingNode && selectedNode && (
+          {viewMode !== "free" && editingNode && selectedNode && (
             <div className="mermaid-inline-editor">
               <span>Edit node text</span>
               <input
@@ -1830,27 +2354,41 @@ export function MermaidEditor() {
             </div>
           )}
 
-          {viewMode === "mermaid" && editingGroup && selectedGroup && (
+          {viewMode !== "free" && editingGroup && selectedGroup && (
             <div className="mermaid-inline-editor">
               <span>Edit subgraph text</span>
               <input
                 autoFocus
                 value={selectedGroup.label}
                 onFocus={checkpoint}
-                onChange={(event) => setDiagram((current) => ({ ...current, groups: current.groups.map((group) => group.id === selectedGroup.id ? { ...group, label: event.target.value } : group) }))}
+                onChange={(event) => updateGroup(selectedGroup.id, event.target.value, false)}
                 onBlur={() => setEditingGroup(null)}
                 onKeyDown={(event) => { if (event.key === "Enter" || event.key === "Escape") setEditingGroup(null); }}
               />
             </div>
           )}
 
-          {(viewMode === "mermaid" || nativeFlowchart) && <><div className="canvas-hint"><BoxSelect size={15} /> Click to select · Double-click to edit · Scroll to pan · ⌘ scroll to zoom</div>
+          {viewMode !== "free" && editingSourceLine !== null && (
+            <form className="mermaid-inline-editor mermaid-statement-editor" onSubmit={(event) => { event.preventDefault(); void applyRenderedStatementEdit(); }}>
+              <span>Mermaid statement · line {editingSourceLine + 1}</span>
+              <input
+                autoFocus
+                aria-label="Mermaid statement"
+                value={editingSourceStatement}
+                onChange={(event) => setEditingSourceStatement(event.target.value)}
+                onKeyDown={(event) => { if (event.key === "Escape") setEditingSourceLine(null); }}
+              />
+              <button className="primary-button" type="submit" disabled={editingSourceBusy}>{editingSourceBusy ? "Validating…" : "Apply"}</button>
+            </form>
+          )}
+
+          {(viewMode !== "free" || nativeFlowchart) && <><div className="canvas-hint"><BoxSelect size={15} /> Click to select · Double-click {nativeFlowchart ? "to edit" : "diagram text to edit its Mermaid statement"} · Scroll to pan · ⌘ scroll to zoom</div>
           <div className="zoom-controls" data-tour="canvas-navigation">
             <IconButton label="Zoom out" onClick={() => zoomAtViewportCenter(zoom - 0.1)}><ZoomOut size={17} /></IconButton>
             <button type="button" onClick={fitView}>{Math.round(zoom * 100)}%</button>
             <IconButton label="Zoom in" onClick={() => zoomAtViewportCenter(zoom + 0.1)}><ZoomIn size={17} /></IconButton>
             <span />
-            <IconButton label="Fit to canvas" onClick={fitView}><Maximize2 size={17} /></IconButton>
+            <IconButton label="Fit to canvas" onClick={fitView}><Minimize2 size={17} /></IconButton>
           </div></>}
           {nativeFlowchart && tool === "connect" && <div className="mode-banner"><Link2 size={15} /> {connectionStart ? "Now choose a destination" : "Choose a starting node"}</div>}
           {nativeFlowchart && tool === "marquee" && <div className="mode-banner"><BoxSelect size={15} /> Drag across nodes · Shift-drag to add</div>}
@@ -1866,6 +2404,24 @@ export function MermaidEditor() {
             {tab === "style" ? (
               <div className="diagram-style-panel">
                 <div className="field-stack">
+                  {viewMode === "polished" ? <>
+                    <p className="style-compatibility-note polished-style-note">Beautiful view uses Beautiful Mermaid&apos;s native derived palette and specialist renderers. These settings never alter the canonical source.</p>
+                    <label><span>Beautiful theme</span><select value={polishedStyle.theme} onChange={(event) => updatePolishedStyle({ theme: event.target.value as PolishedTheme })}>
+                      {POLISHED_THEME_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                    </select></label>
+                    <label><span>Source styling</span><select value={polishedStyle.respectSourceStyles ? "source" : "polished"} onChange={(event) => updatePolishedStyle({ respectSourceStyles: event.target.value === "source" })}>
+                      <option value="source">Source styles + theme</option>
+                      <option value="polished">Theme only</option>
+                    </select></label>
+                    <label><span>Font family</span><input value={polishedStyle.font} onChange={(event) => updatePolishedStyle({ font: event.target.value })} /></label>
+                    <label><span>Canvas padding</span><input type="number" min="8" max="160" value={polishedStyle.padding} onChange={(event) => updatePolishedStyle({ padding: Number(event.target.value) })} /></label>
+                    <label><span>Node spacing</span><input type="number" min="8" max="160" value={polishedStyle.nodeSpacing} onChange={(event) => updatePolishedStyle({ nodeSpacing: Number(event.target.value) })} /></label>
+                    <label><span>Layer spacing</span><input type="number" min="8" max="200" value={polishedStyle.layerSpacing} onChange={(event) => updatePolishedStyle({ layerSpacing: Number(event.target.value) })} /></label>
+                    <label><span>Component spacing</span><input type="number" min="8" max="200" value={polishedStyle.componentSpacing} onChange={(event) => updatePolishedStyle({ componentSpacing: Number(event.target.value) })} /></label>
+                    <label className="toggle-row"><span>Transparent background</span><input type="checkbox" checked={polishedStyle.transparent} onChange={(event) => updatePolishedStyle({ transparent: event.target.checked })} /></label>
+                    {activeDiagramType.id === "xychart" && <label className="toggle-row"><span>Interactive data tips</span><input type="checkbox" checked={polishedStyle.interactive} onChange={(event) => updatePolishedStyle({ interactive: event.target.checked })} /></label>}
+                    <button className="wide-action" type="button" onClick={() => updatePolishedStyle(DEFAULT_POLISHED_STYLE)}><RotateCcw size={15} /> Reset Beautiful style</button>
+                  </> : <>
                   <label><span>Theme</span><select value={diagramStyle.theme} onChange={(event) => updateDiagramStyle({ theme: event.target.value as MermaidTheme })}>
                     {(modernStyleFeatures ? MODERN_THEME_OPTIONS : LEGACY_THEME_OPTIONS).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                     {!modernStyleFeatures && !LEGACY_THEME_OPTIONS.some(({ value }) => value === diagramStyle.theme) && <option value={diagramStyle.theme} disabled>{diagramStyle.theme} — Mermaid 11 only</option>}
@@ -1874,6 +2430,7 @@ export function MermaidEditor() {
                   <label><span>Layout</span><select value={diagramStyle.layout} disabled={!layoutSupported} onChange={(event) => updateDiagramStyle({ layout: event.target.value as MermaidLayout })}>{availableLayoutOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}{!availableLayoutOptions.some(({ value }) => value === diagramStyle.layout) && <option value={diagramStyle.layout} disabled>{diagramStyle.layout} — unavailable for {activeDiagramType.label}</option>}</select></label>
                   {!modernStyleFeatures && <p className="style-compatibility-note">Rendering styles and layouts require Mermaid 11. This project is currently using Mermaid 10.</p>}
                   {modernStyleFeatures && !layoutSupported && <p className="style-compatibility-note">{activeDiagramType.label} controls its own layout, so Mermaid layout engines do not apply to this diagram type.</p>}
+                  {modernStyleFeatures && currentLayoutCompatibilityError && <p className="style-compatibility-note">{currentLayoutCompatibilityError}.</p>}
                   <label><span>Font family</span><input value={diagramStyle.fontFamily} onChange={(event) => updateDiagramStyle({ fontFamily: event.target.value })} /></label>
                   {diagramStyle.theme === "base" ? <div className="diagram-color-grid">
                     {([
@@ -1882,7 +2439,15 @@ export function MermaidEditor() {
                     ] as Array<[keyof DiagramStyle, string]>).map(([key, label]) => <label key={key}><span>{label}</span><div className="color-input"><input type="color" value={diagramStyle[key]} onChange={(event) => updateDiagramStyle({ [key]: event.target.value })} /><input value={diagramStyle[key]} onChange={(event) => updateDiagramStyle({ [key]: event.target.value })} /></div></label>)}
                   </div> : <p className="style-palette-note">This preset owns its palette. Choose <b>Base</b> to customise diagram colours.</p>}
                   <button className="wide-action" type="button" onClick={() => updateDiagramStyle(DEFAULT_DIAGRAM_STYLE)}><RotateCcw size={15} /> Reset diagram style</button>
+                  </>}
                 </div>
+              </div>
+            ) : selectedSourceStatement !== undefined ? (
+              <div className="field-stack rendered-statement-properties">
+                <div className="selection-heading"><div className="edge-symbol"><Code2 size={18} /></div><div><span>Mermaid statement</span><b>Line {selectedSourceLine + 1}</b></div></div>
+                <label><span>Source</span><textarea value={selectedSourceStatement} rows={4} readOnly /></label>
+                <button className="wide-action" type="button" onClick={() => { setEditingSourceLine(selectedSourceLine); setEditingSourceStatement(selectedSourceStatement); }}><Code2 size={15} /> Edit validated statement</button>
+                <p className="style-compatibility-note">Changes are accepted only after the selected Mermaid engine validates the complete diagram.</p>
               </div>
             ) : selectedNode ? (
               <>
@@ -1932,7 +2497,7 @@ export function MermaidEditor() {
             ) : selected.length === 1 && diagram.groups.some((group) => group.id === selected[0]) ? (
               <div className="field-stack">
                 <div className="selection-heading"><div className="multi-icon compact"><Group size={18} /></div><div><span>Subgraph</span><b>{diagram.groups.find((group) => group.id === selected[0])?.label}</b></div></div>
-                <label><span>Name</span><input value={diagram.groups.find((group) => group.id === selected[0])?.label || ""} onFocus={checkpoint} onChange={(event) => setDiagram((current) => ({ ...current, groups: current.groups.map((group) => group.id === selected[0] ? { ...group, label: event.target.value } : group) }))} /></label>
+                <label><span>Name</span><input value={diagram.groups.find((group) => group.id === selected[0])?.label || ""} onFocus={checkpoint} onChange={(event) => updateGroup(selected[0], event.target.value, false)} /></label>
                 <button className="wide-action" type="button" onClick={ungroupSelected}><Ungroup size={16} /> Remove subgraph</button>
               </div>
             ) : (
@@ -2078,6 +2643,16 @@ export function MermaidEditor() {
                   <div><b>Link nodes</b><kbd>L</kbd></div>
                   <div><b>Create subgraph</b><kbd>S</kbd></div>
                   <div><b>Add decision</b><kbd>D</kbd></div>
+                  <div><b>Add connected decision</b><span><kbd>⇧</kbd><kbd>D</kbd></span></div>
+                  <div><b>Edit selected node</b><kbd>E</kbd></div>
+                </div>
+              </div>
+              <div className="shortcuts-section">
+                <span>Canvas views</span>
+                <div className="shortcuts-list">
+                  <div><b>FreeForm canvas</b><kbd>1</kbd></div>
+                  <div><b>Mermaid canvas</b><kbd>2</kbd></div>
+                  <div><b>Beautiful canvas</b><kbd>3</kbd></div>
                 </div>
               </div>
               <div className="shortcuts-section">
@@ -2090,6 +2665,7 @@ export function MermaidEditor() {
                   <div><b>Pan canvas</b><kbd>Scroll</kbd></div>
                   <div><b>Zoom canvas</b><span><kbd>⌘</kbd><kbd>Scroll</kbd></span></div>
                   <div><b>Fit Chart</b><kbd>F</kbd></div>
+                  <div><b>Fill Chart</b><span><kbd>⇧</kbd><kbd>F</kbd></span></div>
                   <div><b>Organise Chart</b><kbd>O</kbd></div>
                 </div>
               </div>

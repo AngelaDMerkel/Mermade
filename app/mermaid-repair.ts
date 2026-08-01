@@ -31,6 +31,16 @@ function stripMarkdownFence(source: string) {
   return match?.[1]?.trim() || source;
 }
 
+function stripMermaidWrapper(source: string) {
+  const trimmed = source.trim();
+  const wrapped = trimmed.match(/^<mermaid(?:\s+[^>]*)?>\s*([\s\S]*?)\s*<\/mermaid>$/i);
+  if (wrapped?.[1]) return wrapped[1].trim().replace(/^raw\s*\r?\n/i, "");
+  if (detectDiagramType(trimmed) && /<\/mermaid>\s*$/i.test(trimmed)) {
+    return trimmed.replace(/\s*<\/mermaid>\s*$/i, "");
+  }
+  return source;
+}
+
 function normalizeTypography(source: string) {
   return source
     .replace(/[“”]/g, '"')
@@ -99,8 +109,18 @@ export function createRepairProposals(source: string, selectedVersion: RepairVer
     source: withoutFence,
   });
 
-  const normalized = normalizeTypography(withoutFence);
-  if (normalized !== withoutFence) add(proposals, {
+  const withoutWrapper = stripMermaidWrapper(withoutFence);
+  if (withoutWrapper !== withoutFence) add(proposals, {
+    id: "remove-mermaid-wrapper",
+    title: "Remove the Mermaid wrapper tag",
+    description: "Keep the Mermaid diagram and remove the surrounding site or wiki `<mermaid>` markup.",
+    confidence: "high",
+    category: "syntax",
+    source: withoutWrapper,
+  });
+
+  const normalized = normalizeTypography(withoutWrapper);
+  if (normalized !== withoutWrapper) add(proposals, {
     id: "normalize-punctuation",
     title: "Normalise pasted punctuation",
     description: "Replace smart quotes, non-breaking spaces, and visual arrows with Mermaid syntax.",
@@ -168,7 +188,7 @@ export function createRepairProposals(source: string, selectedVersion: RepairVer
     });
   }
 
-  const combinedBase = addDiagramDeclaration(repairHeader(normalizeTypography(stripMarkdownFence(source))), inferredTypeId);
+  const combinedBase = addDiagramDeclaration(repairHeader(normalizeTypography(stripMermaidWrapper(stripMarkdownFence(source)))), inferredTypeId);
   const combined = inferredTypeId === "flowchart" ? balanceFlowchartSubgraphs(combinedBase) : combinedBase;
   if (combined !== source) add(proposals, {
     id: "apply-safe-repairs",

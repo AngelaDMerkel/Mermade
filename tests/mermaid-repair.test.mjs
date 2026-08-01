@@ -30,6 +30,24 @@ test("offers deterministic repairs for fenced and typographic Mermaid source", a
   assert.ok(proposals.some((proposal) => proposal.source.includes("A --> B")));
 });
 
+test("removes site wrapper markup from otherwise valid Mermaid", async () => {
+  const { createRepairProposals } = await loadRepairHelpers();
+  const source = "flowchart TB\n  A --> B\n</mermaid>";
+  const proposals = createRepairProposals(source, "11.16.0", "flowchart");
+  const repair = proposals.find((proposal) => proposal.id === "remove-mermaid-wrapper");
+
+  assert.equal(repair?.source, "flowchart TB\n  A --> B");
+});
+
+test("removes DokuWiki raw mode with its Mermaid wrapper", async () => {
+  const { createRepairProposals } = await loadRepairHelpers();
+  const source = "<mermaid>\nraw\nflowchart TB\n  A --> B\n</mermaid>";
+  const proposals = createRepairProposals(source, "11.16.0", "flowchart");
+  const repair = proposals.find((proposal) => proposal.id === "remove-mermaid-wrapper");
+
+  assert.equal(repair?.source, "flowchart TB\n  A --> B");
+});
+
 test("offers diagram-specific declaration and subgraph repairs", async () => {
   const { createRepairProposals } = await loadRepairHelpers();
   const declaration = createRepairProposals("A --> B", "11.16.0", "flowchart");
