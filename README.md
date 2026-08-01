@@ -1,105 +1,291 @@
-# Mermade
+<p align="center">
+  <img src="public/brand/title-card.svg" alt="Mermade — a modern visual editor for Mermaid diagrams" width="100%">
+</p>
 
-Mermade is a browser-local visual editor for the diagram types supported by Mermaid 11.16. Mermaid source remains the canonical, portable document format.
+<p align="center">
+  <a href="https://angeladmerkel.github.io/Mermade/"><strong>Open the editor</strong></a>
+  ·
+  <a href="#local-development">Run locally</a>
+  ·
+  <a href="#roadmap">Roadmap</a>
+</p>
 
-## Current editor
+<p align="center">
+  <a href="https://github.com/AngelaDMerkel/Mermade/actions/workflows/pages.yml"><img alt="Build and test status" src="https://github.com/AngelaDMerkel/Mermade/actions/workflows/pages.yml/badge.svg"></a>
+  <a href="LICENSE"><img alt="PolyForm Noncommercial License 1.0.0" src="https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-E0095F"></a>
+  <img alt="Mermaid 11.16" src="https://img.shields.io/badge/Mermaid-11.16-ff3670">
+  <img alt="Local-first static application" src="https://img.shields.io/badge/deployment-static%20%26%20local--first-24232a">
+</p>
 
-- Drag nodes around a dotted canvas
-- Double-click a node to rename it in place
-- Edit node text, ID, shape, fill, and text color in the inspector
-- Create and edit labeled relationships
-- Shift-click to multi-select and move nodes together
-- Convert selected nodes into a Mermaid `subgraph`
-- Edit Mermaid source for every registered diagram type
-- Switch safely between diagram types using validated starter templates
-- Automatically organize pasted flowcharts from their relationships, with a manual Organize control for restoring the layout
-- Choose shapes by their recommended flowchart purpose, with common patterns first and Mermaid's complete shape catalog available
-- Open diagram-aware Help from the canvas rail for quick-start syntax, editing guidance, common pitfalls, official Mermaid documentation, and curated standards or method references
-- Use FreeForm visual editing for graph and spatial diagrams
-- Use Structured visual editing for ordered, lane, and timeline diagrams
-- Use Data visual editing for chart and dataset-oriented diagrams
-- Copy Mermaid, download `.mmd`, or render and download SVG
-- Import local `.mmd`, `.mermaid`, `.md`, or `.txt` files, including Mermaid code fences in Markdown
-- Undo and redo editor operations
-- Save the working diagram locally in the browser
-- Switch between left-to-right and top-to-bottom Mermaid directions
-- Apply every current Mermaid theme, rendering look, compatible graph layout, font, and Base-theme palette from the Style inspector; canvas rendering and SVG export use the same portable Mermaid frontmatter
-- Review parser-verified repair options for common syntax damage, Mermaid version mismatches, and diagram-specific structural errors
-- Learn the interface through a first-launch welcome dialog and optional guided tour, which can be restarted from Help
-- Use `F` to fit the chart and `O` to organise a flowchart, alongside the canvas tool shortcuts
+Mermade is a modern, browser-based visual editor for [Mermaid](https://github.com/mermaid-js/mermaid). It grew out of a practical need: I produce a large amount of documentation for my work and, alongside the rise of AI and RAG, wanted a tool that made Mermaid fast and approachable enough for colleagues to use as well. Mermade helps it get made (heh).
 
-The rich direct-manipulation canvas currently provides its deepest node, relationship, and subgraph controls for flowcharts. Other diagram types use family-specific statement cards; a visual edit is committed only after the selected Mermaid engine parses the candidate source successfully.
+Mermade runs entirely locally, and project storage remains in the browser.
+
+## Why Mermade?
+
+Mermaid diagrams are portable, simple and have guaranteed longevity because they are plain text. Unfortunately, although their text format is readable, reviewable, diffable and widely supported, source-first editing can make spatial work unnecessarily difficult: a small change in layout, grouping, labelling or relationships often requires repeatedly editing text and checking the render.
+
+Mermade exists to close that gap.
+
+- **Make Mermaid visual without making it proprietary.** Every successful visual edit becomes valid Mermaid source that can leave the editor at any time.
+- **Support different ways of thinking.** Use Mermaid's authoritative layout, arrange graph-like diagrams spatially, edit ordered statements structurally, or work with chart data directly.
+- **Make common changes immediate.** Single-click to select, double-click to edit text, drag to reposition, marquee-select, connect nodes, and convert selections into subgraphs.
+- **Encourage useful diagrams.** Flowchart shapes are organised by recommended purpose, and diagram-aware Help links syntax guidance to established standards and good practice.
+- **Keep local work local.** There is no account, database, tracking requirement, or server-side document store. Browser storage is used for the working project and preferences.
+
+## Editing model
+
+```mermaid
+flowchart LR
+  I[Create or import] --> S[(Canonical Mermaid source)]
+  S <--> M[Mermaid render view]
+  S <--> V[Visual editing mode]
+  S <--> E[Source editor]
+  S --> X[Mermaid and SVG export]
+```
+
+Candidate edits are parsed by the selected Mermaid engine before they are committed. That constraint lets visual tools remain helpful without silently creating a private diagram format or invalid Mermaid syntax.
+
+## Features
+
+### Visual and source editing
+
+- Mermaid render view is the default and supports selection, marquee selection, inline text editing, panning, zooming, and fit-to-chart.
+- FreeForm editing provides direct spatial control for graph and spatial diagram families, including exact Mermaid flowchart shapes.
+- Structured editing presents ordered, lane-based, sequence, timeline, and grammar-oriented diagrams as editable statements.
+- Data editing presents chart and dataset-oriented syntax as editable data statements.
+- The source panel supports editing, undo/redo, version detection, validation, and copying without leaving the browser.
+- Imports accept `.mmd`, `.mermaid`, `.md`, and `.txt`, including Mermaid code fences embedded in Markdown.
+
+### Flowchart tools
+
+- Add processes, decisions, relationships, and subgraphs from the canvas.
+- Single-click selection and double-click text editing in Mermaid and FreeForm views.
+- Shift-click multi-selection and a marquee tool that works in both views.
+- Convert selected nodes into a Mermaid `subgraph`.
+- Choose common shapes by recommended flowchart purpose, with the complete Mermaid shape catalogue still available.
+- Organise pasted flowcharts from their graph relationships, or manually fit and organise the chart with `F` and `O`.
+- Create a connected node from the current selection with `Shift` + `N`.
+
+### Appearance, compatibility, and recovery
+
+- Properties, Appearance, and diagram-level Style inspectors separate content, selection styling, and chart-wide configuration.
+- Mermaid themes, rendering looks, compatible layout engines, fonts, and Base-theme palette variables are written as portable Mermaid frontmatter.
+- Automatic Mermaid version detection chooses between bundled Mermaid 11.16 and Mermaid 10.9 compatibility; the engine can also be selected explicitly.
+- Layered repair suggestions cover safe normalisation, version compatibility, and diagram-specific structural problems before any change is applied.
+- Light, dark, and system themes, configurable grid and snapping, keyboard shortcut help, a welcome screen, and an optional guided tour are included.
+- Export produces reusable Mermaid source, `.mmd` files, or SVG.
+
+## Feature gallery
+
+These are real Mermade browser captures at 1600 × 1000, not reconstructed mockups. Select any image to inspect the full-resolution version. Vector SVG remains the preferred format for the title card, brand assets, and explanatory diagrams where the interface itself is not the subject.
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <a href="public/screenshots/gallery/flowchart-properties.jpg"><img src="public/screenshots/gallery/flowchart-properties.jpg" alt="A production flowchart in Mermaid view with a decision selected and the Properties inspector open"></a><br>
+      <strong>Mermaid view and Properties</strong><br>
+      Work directly with Mermaid's authoritative render. Select a node to edit its identity, label, purpose-based shape, and relationships; double-click diagram text for immediate editing.
+    </td>
+    <td width="50%" valign="top">
+      <a href="public/screenshots/gallery/freeform-appearance.jpg"><img src="public/screenshots/gallery/freeform-appearance.jpg" alt="An incident response flowchart in FreeForm view with a decision selected and the Appearance inspector open"></a><br>
+      <strong>FreeForm and Appearance</strong><br>
+      Reposition graph and spatial diagrams while retaining Mermaid-compatible node geometry. Apply fills and text colours to the active selection with a live preview.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <a href="public/screenshots/gallery/freeform-multiselect.jpg"><img src="public/screenshots/gallery/freeform-multiselect.jpg" alt="Four selected flowchart nodes in FreeForm view with the Create subgraph action visible"></a><br>
+      <strong>Multi-select and subgraphs</strong><br>
+      Shift-click or marquee-select related nodes, move them together, and turn the selection into valid Mermaid <code>subgraph</code> syntax in one action.
+    </td>
+    <td width="50%" valign="top">
+      <a href="public/screenshots/gallery/c4-style.jpg"><img src="public/screenshots/gallery/c4-style.jpg" alt="A C4 container diagram for a commerce platform with the diagram-level Style inspector open"></a><br>
+      <strong>Diagram-level Style</strong><br>
+      Configure themes, rendering looks, compatible layout engines, fonts, and Base-theme palette variables. Mermade writes the result as portable Mermaid frontmatter.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <a href="public/screenshots/gallery/sequence-structured.jpg"><img src="public/screenshots/gallery/sequence-structured.jpg" alt="A payment sequence diagram represented as editable ordered statements in Structured mode"></a><br>
+      <strong>Structured editing</strong><br>
+      Sequence and other ordered diagram families become editable, reorderable statements without hiding the underlying Mermaid grammar.
+    </td>
+    <td width="50%" valign="top">
+      <a href="public/screenshots/gallery/xy-data.jpg"><img src="public/screenshots/gallery/xy-data.jpg" alt="An XY chart represented as editable title, axis, bar, and line statements in Data mode"></a><br>
+      <strong>Data editing</strong><br>
+      Quantitative diagram families expose their titles, axes, series, and datasets in a focused visual mode, with every change validated before it replaces the source.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <a href="public/screenshots/gallery/source-editor.jpg"><img src="public/screenshots/gallery/source-editor.jpg" alt="The Mermade source editor showing a complex sequence diagram with line numbers and Mermaid syntax status"></a><br>
+      <strong>First-class source editing</strong><br>
+      Edit, validate, copy, undo, and redo the canonical Mermaid document. Mermade detects the diagram family and minimum Mermaid version from pasted source.
+    </td>
+    <td width="50%" valign="top">
+      <a href="public/screenshots/gallery/repair-workflow.jpg"><img src="public/screenshots/gallery/repair-workflow.jpg" alt="The layered Mermaid repair dialog offering verified fixes for a Markdown code fence and pasted punctuation"></a><br>
+      <strong>Verified, layered repair</strong><br>
+      Invalid source becomes an actionable repair entry point. Safe normalisation, compatibility, and structural suggestions are tested before Mermade offers to apply them.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <a href="public/screenshots/gallery/flowchart-help.jpg"><img src="public/screenshots/gallery/flowchart-help.jpg" alt="Flowchart help with guidance for when to use the diagram, a quick-start example, recommended practices, pitfalls, and standards references"></a><br>
+      <strong>Diagram-aware Help</strong><br>
+      The active diagram type supplies a quick start, recommended practices, common pitfalls, official syntax documentation, and relevant method or standards references.
+    </td>
+    <td width="50%" valign="top">
+      <a href="public/screenshots/gallery/diagram-catalogue.jpg"><img src="public/screenshots/gallery/diagram-catalogue.jpg" alt="Mermade's diagram type catalogue grouped by FreeForm, Structured, and Data visual modes"></a><br>
+      <strong>34 diagram types, three visual modes</strong><br>
+      Switch diagram families from the canvas. FreeForm, Structured, and Data controls adapt to the active grammar while Mermaid rendering and source editing remain available throughout.
+    </td>
+  </tr>
+</table>
+
+## Diagram support
+
+Mermade's registry currently covers 34 Mermaid diagram types. Exact Mermaid source editing and validated rendering are available for every registered type; visual controls are adapted to the diagram family.
+
+| Visual mode | Best suited to | Registered diagram types |
+| --- | --- | --- |
+| **FreeForm** | Graphs and spatial models | Flowchart, State, Class, Entity Relationship, Requirement, C4, Mindmap, Block, Architecture, Wardley Map, TreeView |
+| **Structured** | Ordered interactions, lanes, plans, and grammars | Swimlanes, Sequence, User Journey, Gantt, Git Graph, Timeline, ZenUML, Packet, Kanban, Event Modelling, Railroad, Railroad EBNF, Railroad ABNF, Railroad PEG |
+| **Data** | Quantitative and set-based diagrams | Pie, Quadrant, Sankey, XY, Radar, Treemap, Venn, Ishikawa, Cynefin |
+
+The deepest direct node, relationship, shape, and subgraph editing is currently available for flowcharts. Other diagram types use family-specific statement editors and always retain the full source editor as the compatibility baseline.
+
+## Keyboard shortcuts
+
+| Shortcut | Action | Shortcut | Action |
+| --- | --- | --- | --- |
+| `V` | Select | `M` | Marquee select |
+| `N` | New node | `Shift` + `N` | New connected node |
+| `L` | Link nodes | `S` | Create subgraph |
+| `D` | Add decision | `F` | Fit chart |
+| `O` | Organise chart | `Delete` | Delete selection |
+| `Cmd/Ctrl` + `Z` | Undo | `Cmd/Ctrl` + `Shift` + `Z` | Redo |
+| Scroll | Pan in two dimensions | `Cmd/Ctrl` + scroll | Zoom |
 
 ## Local development
 
-Requires Node.js 22 or newer.
+Mermade requires Node.js 22.13 or newer.
 
 ```bash
+git clone https://github.com/AngelaDMerkel/Mermade.git
+cd Mermade
 npm install --ignore-scripts
 npm run dev
 ```
 
-Open `http://localhost:3000`.
+Open [http://localhost:3000](http://localhost:3000). The editor, documents, preferences, tests, and screenshots are all local to the repository or browser.
+
+Useful commands:
+
+```bash
+npm run dev          # local development server
+npm test             # production build plus all automated tests
+npm run lint         # static analysis
+npm run build:pages  # verify the static GitHub Pages export
+```
 
 ## Testing
 
-```bash
-npm test
+Mermade tests both Mermaid correctness and rendered output. The shared diagram registry drives the standards suites, so registering a new diagram type automatically subjects it to the same baseline checks.
+
+```mermaid
+flowchart LR
+  R[Diagram registry] --> P[Real Mermaid parser]
+  R --> G[SVG geometry and visibility]
+  R --> T[Themes and layouts]
+  I[Browser interactions] --> U[Editing and navigation]
+  P --> B[Production build]
+  G --> B
+  T --> B
+  U --> B
+  B --> S[Static Pages export]
 ```
 
-The test command builds the local application and runs registry-driven standards suites against every supported Mermaid type:
+The test suite covers:
 
-- **Syntax:** the starter source must pass Mermaid's real browser parser.
-- **Rendering:** the starter must produce a non-empty, error-free SVG with finite geometry, visible text and shapes, and non-distorting scaling. Type-specific regressions, such as C4 title placement, are checked in the same pass.
-- **Diagram style:** each starter must continue to parse and render after Mermade adds its portable frontmatter style configuration.
-- **Theme and layout engines:** every exposed Mermaid 11 theme, rendering look, and graph layout must produce valid, materially styled SVG; portable styling is also checked with Mermaid 10.
+- **Syntax standards:** every starter passes the real browser parser for its Mermaid version.
+- **Rendering standards:** every starter produces a non-empty, error-free SVG with finite geometry, visible text and shapes, and non-distorting scaling.
+- **Diagram-specific regressions:** known rendering risks, including C4 title placement, receive explicit checks.
+- **Style portability:** registered diagrams continue to parse and render with Mermade's Mermaid frontmatter, supported themes, rendering looks, and applicable layout engines.
+- **Interaction behaviour:** onboarding, the guided tour, source repair, source undo/redo, direct Mermaid node editing, FreeForm shapes, marquee selection, and view-position preservation are browser-tested.
+- **Static delivery:** generated HTML, metadata, branding, licence declarations, and the GitHub Pages workflow have regression coverage.
 
-Browser interaction tests additionally cover first-launch onboarding, the guided tour, verified source repair, direct Mermaid node editing, exact FreeForm shapes, and position-preserving view switches.
+Rendering tests use Playwright Core with an installed Google Chrome. Set `CHROME_PATH` if Chrome is installed in a nonstandard location.
 
-Rendering tests use Playwright Core with an installed Google Chrome. Set `CHROME_PATH` when Chrome is installed in a nonstandard location. Adding a type to the shared registry automatically adds it to both suites, so a new type cannot silently skip the standards.
+## Deployment
 
-## GitHub Pages
+Mermade has no server-side data dependency. The included workflow tests the project, creates a static export, and deploys it whenever `main` is pushed.
 
-The editor has no server-side data dependency. The included workflow builds a static export and deploys it whenever `main` is pushed. Before the first deployment, open **Settings → Pages** in the repository and choose **GitHub Actions** as the Pages source. GitHub does not allow the workflow's default token to enable Pages for a repository that has never enabled it.
+Before the first deployment, open **Settings → Pages** in the GitHub repository and select **GitHub Actions** as the source. Then verify the same production target locally with:
 
-You can verify the static target locally with:
+GitHub Pages is available for public repositories on GitHub Free. Publishing directly from a private repository requires GitHub Pro, Team, or Enterprise; if GitHub shows an upgrade prompt, making the repository public or changing the account plan is an external prerequisite that the workflow cannot override.
 
 ```bash
 npm run build:pages
 ```
 
-## Deployment shape
+The generated `out/` directory can also be served from any static web server. A future Docker image can serve the same build with nginx before any optional collaboration API is introduced.
 
-The current application is a static, browser-local GitHub Pages build with no authentication, database, worker, or server-side data dependency. A later Docker image can serve the same static editor with nginx first, then add an API only when shared documents, authentication, or real-time collaboration are introduced.
+## Credits, citations, and provenance
 
-## Acknowledgements and provenance
+Mermade stands on a mature ecosystem and deliberately distinguishes dependencies, references, and original project code.
 
-- Diagram parsing and SVG rendering are powered by [Mermaid](https://github.com/mermaid-js/mermaid), used as an npm dependency under its own license.
+### Software
+
+- Diagram parsing and SVG rendering are powered by [Mermaid](https://github.com/mermaid-js/mermaid), installed as an npm dependency under Mermaid's own licence.
 - ELK and Tidy Tree layouts use Mermaid's official [`@mermaid-js/layout-elk`](https://www.npmjs.com/package/@mermaid-js/layout-elk) and [`@mermaid-js/layout-tidy-tree`](https://www.npmjs.com/package/@mermaid-js/layout-tidy-tree) packages.
-- ZenUML support is provided by Mermaid's official [`@mermaid-js/mermaid-zenuml`](https://github.com/mermaid-js/mermaid/tree/develop/packages/mermaid-zenuml) plugin.
-- Interface icons are provided by [Lucide](https://github.com/lucide-icons/lucide), also used as an npm dependency under its own license.
-- The browser application is built with React and Next.js and exported statically for GitHub Pages.
+- ZenUML support uses Mermaid's official [`@mermaid-js/mermaid-zenuml`](https://github.com/mermaid-js/mermaid/tree/develop/packages/mermaid-zenuml) plugin.
+- Interface icons are provided by [Lucide](https://github.com/lucide-icons/lucide). The application is built with [React](https://react.dev/) and [Next.js](https://nextjs.org/).
 
-Mermade's editor UI, freeform canvas, interaction model, and Mermaid source adapter were implemented specifically for this project. No application code was copied or adapted from [saketkattu/mermaid-visual-editor](https://github.com/saketkattu/mermaid-visual-editor) or from Mermaid's own editor examples.
+Mermade's interface, canvas, interaction model, source adapter, repair workflow, and test suites were implemented specifically for this project. No application code was copied or adapted from [saketkattu/mermaid-visual-editor](https://github.com/saketkattu/mermaid-visual-editor), Mermaid's editor examples, or [lukilabs/beautiful-mermaid](https://github.com/lukilabs/beautiful-mermaid). Beautiful Mermaid is a possible future optional renderer and is listed in the roadmap below; it is not currently a dependency.
 
-The local build applies a narrow compatibility patch to Mermaid's generated Block Diagram renderer: its debug serialization must omit a temporary D3 DOM handle when Mermaid runs inside a React-owned document. The patch changes no parser or diagram semantics and is applied automatically by the development and build scripts.
+The build applies a narrow compatibility patch to Mermaid's generated Block Diagram renderer. The patch excludes a temporary D3 DOM handle from debug serialisation when Mermaid runs inside a React-owned document; it changes no parser or diagram semantics.
+
+### Diagram guidance
+
+The diagram-aware Help panel begins with the official [Mermaid syntax documentation](https://mermaid.js.org/intro/) and supplements it with method or standards references appropriate to the active chart. Key references include:
+
+- [ASQ flowchart guidance](https://asq.org/quality-resources/flowchart) and [ASQ fishbone guidance](https://asq.org/quality-resources/fishbone)
+- [OMG UML 2.5.1](https://www.omg.org/spec/UML/2.5.1) and [OMG SysML guidance](https://www.omg.org/sysml/sysmlv1/)
+- [The C4 model](https://c4model.com/diagrams) and its [diagram review checklist](https://c4model.com/diagrams/checklist)
+- [W3C EBNF notation](https://www.w3.org/TR/xml/#sec-notation), [RFC 5234 ABNF](https://www.rfc-editor.org/rfc/rfc5234.html), and [RFC 8200](https://www.rfc-editor.org/rfc/rfc8200.html)
+- [The Kanban Guide](https://kanbanguides.org/), [Event Modelling](https://eventmodeling.org/posts/what-is-event-modeling/), and [Learn Wardley Mapping](https://learnwardleymapping.com/)
+
+These links are educational references, not copied content or endorsements.
 
 ## Brand assets
 
-The approved Connected M identity is available in `public/brand` as editable SVG masters and PNG exports. Its primary accent is Mermaid pink (`#E0095F`). The title card is supplied at 1200 × 630 pixels, and the favicon package includes SVG, PNG, Apple touch icon, and ICO formats.
+The Connected M identity is stored in [`public/brand`](public/brand) as editable SVG masters and PNG exports. The primary accent is Mermaid pink (`#E0095F`). The package includes the 1200 × 630 title card, logo marks and lockups, favicon sizes, an Apple touch icon, and a 512-pixel application icon.
 
-## License
+## Licence
 
 Copyright © 2026 Colin Alexander Duffy.
 
-Except where otherwise noted, Mermade's original source code, documentation, and visual assets are licensed under the [Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License](https://creativecommons.org/licenses/by-nc-sa/4.0/). Redistribution and adaptation require attribution, are limited to noncommercial use, and must remain under the same license. See [`LICENSE`](LICENSE) for the complete legal terms.
+Mermade's original source code and project files are available under the [PolyForm Noncommercial License 1.0.0](LICENSE). The licence is written specifically for software and permits use, modification, and redistribution for noncommercial purposes while requiring downstream recipients to receive the licence terms and required copyright notice.
 
-Third-party packages and other externally sourced material are excluded from this grant and remain subject to their respective licenses. Patent and trademark rights are not granted.
+This is a **source-available noncommercial licence**, not an OSI-approved open-source licence. Commercial use requires separate permission from the copyright holder. Third-party packages and externally sourced material are excluded from this grant and remain subject to their own licences.
 
-## Near-term roadmap
+## Roadmap
 
-1. Add deeper diagram-specific forms for Sequence, Gantt, State, Class, and ER syntax.
-2. Add alignment guides and auto-layout to the flowchart FreeForm canvas.
-3. Support editable edge routing and node ports.
-4. Add reusable named style presets and custom Mermaid `classDef` editing.
-5. Add optional shared projects and multiplayer collaboration behind the Docker deployment.
+- [x] Browser-local projects with static GitHub Pages deployment
+- [x] Mermaid and FreeForm views with position-preserving switching
+- [x] Source editing, import, export, undo/redo, and layered repair
+- [x] Flowchart node, relationship, shape, multi-select, marquee, and subgraph tools
+- [x] Diagram-wide themes, rendering styles, layouts, and palette controls
+- [x] Registry-driven syntax and rendering standards for all supported diagram types
+- [x] Welcome experience, guided tour, diagram-aware Help, and keyboard shortcuts
+- [ ] Deepen diagram-specific visual forms for Sequence, Gantt, State, Class, and ER diagrams
+- [ ] Add alignment guides, editable edge routing, and node ports to FreeForm
+- [ ] Add reusable named style presets and visual `classDef` editing
+- [ ] Evaluate [Beautiful Mermaid](https://github.com/lukilabs/beautiful-mermaid) as an optional render/export backend for its supported diagram types, while preserving Mermaid syntax and the current compatibility renderer
+- [ ] Package the static editor as a small Docker/nginx image
+- [ ] Explore optional shared projects and real-time collaboration behind a self-hosted service
+
+---
+
+<p align="center"><strong>Mermade</strong> — make Mermaid diagrams visually, keep them Mermaid.</p>

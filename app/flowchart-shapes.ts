@@ -78,7 +78,7 @@ const completeCatalog: FlowchartShapeOption[] = [
 
 export const FLOWCHART_SHAPE_GROUPS = [
   { label: "Common — recommended", options: common },
-  { label: "Specialized", options: specialized },
+  { label: "Specialised", options: specialized },
   { label: "All Mermaid shapes", options: completeCatalog },
 ];
 

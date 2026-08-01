@@ -2,7 +2,7 @@ export function normalizeRenderedSvg(svg: SVGSVGElement, diagramTypeId: string, 
   svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
 
   // Mermaid's experimental C4 renderer offsets a direct-child title by four
-  // diagram margins instead of centering it in the generated viewBox.
+  // diagram margins instead of centring it in the generated viewBox.
   if (diagramTypeId === "c4") {
     const titleText = source.match(/^\s*title\s+(.+?)\s*$/m)?.[1];
     const title = titleText

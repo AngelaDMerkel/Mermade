@@ -1,7 +1,7 @@
 {
   "name": "mermade-visual-editor",
   "version": "0.1.0",
-  "license": "CC-BY-NC-SA-4.0",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "private": true,
   "engines": {
     "node": ">=22.13.0"
@@ -12,8 +12,8 @@
     "build": "npm run patch:mermaid && next build",
     "build:pages": "npm run patch:mermaid && GITHUB_ACTIONS=true next build",
     "start": "next start",
-    "test": "npm run build && node --test tests/*.test.mjs",
-    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next"
+    "test": "MERMADE_TEST_BUILD=true npm run build && MERMADE_TEST_BUILD=true node --test tests/*.test.mjs",
+    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern .next-test"
   },
   "dependencies": {
     "@mermaid-js/layout-elk": "^0.2.2",
@@ -22,7 +22,7 @@
     "lucide-react": "^0.468.0",
     "mermaid": "^11.16.0",
     "mermaid-v10": "npm:mermaid@10.9.6",
-    "next": "16.2.6",
+    "next": "16.2.12",
     "react": "19.2.6",
     "react-dom": "19.2.6"
   },
@@ -31,10 +31,10 @@
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
     "eslint": "9.39.4",
-    "eslint-config-next": "16.2.6",
+    "eslint-config-next": "16.2.12",
     "playwright-core": "^1.57.0",
     "typescript": "5.9.3",
-    "vite": "8.0.13"
+    "vite": "8.2.0"
   },
   "type": "module"
 }

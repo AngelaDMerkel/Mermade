@@ -43,6 +43,29 @@ test("server-renders the local Mermaid editor", async () => {
   assert.doesNotMatch(html, /codex-preview|chatgpt\.site|Sign in required/i);
 });
 
+test("uses British English in authored interface and documentation copy", async () => {
+  const [editor, help, types, shapes, layout, readme] = await Promise.all([
+    readFile(new URL("../app/mermaid-editor.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/mermaid-help.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/mermaid-types.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/flowchart-shapes.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../README.md", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(editor, /Base — customisable/);
+  assert.match(editor, />Fill colour</);
+  assert.match(editor, />Text colour</);
+  assert.match(editor, /aria-label="Colour theme"/);
+  assert.doesNotMatch(editor, /Base — customizable|>Fill color|>Text color|aria-label="Color theme"/);
+  assert.match(help, /Visualise work items/);
+  assert.doesNotMatch(help, /\bVisualize\b|\brecognized\b|\bnormalized\b|\bOrganize\b|\bcolor\b/);
+  assert.match(types, /label: "Event Modelling"/);
+  assert.match(shapes, /label: "Specialised"/);
+  assert.match(layout, /<html lang="en-GB">/);
+  assert.doesNotMatch(readme, /\bOrganize\b|\borganized\b|\bcolors\b|\bnormalization\b|\bbehavior\b/);
+});
+
 test("imports local Mermaid and Markdown files through validated source", async () => {
   const editor = await readFile(new URL("../app/mermaid-editor.tsx", import.meta.url), "utf8");
 
@@ -168,7 +191,7 @@ test("creates white nodes and supports the connected Shift+N shortcut", async ()
   assert.match(editor, /Select one node before using Shift\+N/);
 });
 
-test("auto-organizes pasted flowcharts from their relationships", async () => {
+test("auto-organises pasted flowcharts from their relationships", async () => {
   const editor = await readFile(new URL("../app/mermaid-editor.tsx", import.meta.url), "utf8");
 
   assert.match(editor, /layoutFlowchart\(parsedNodes, edges, direction\)/);
@@ -184,7 +207,7 @@ test("provides diagram-wide Mermaid styling as a third inspector scope", async (
   assert.match(editor, />Style<\/button>/);
   assert.match(editor, /applyDiagramStyle/);
   assert.match(editor, />Layout<\/span>/);
-  assert.match(editor, /Base — customizable/);
+  assert.match(editor, /Base — customisable/);
   assert.match(editor, /redux-dark-color/);
   assert.match(editor, /cose-bilkent/);
   assert.match(editor, /This preset owns its palette/);
@@ -243,7 +266,7 @@ test("provides Fit Chart and Organise Chart hotkeys", async () => {
   assert.match(editor, />Organise Chart<\/b><kbd>O<\/kbd>/);
 });
 
-test("offers best-practice flowchart shapes before the complete Mermaid catalog", async () => {
+test("offers best-practice flowchart shapes before the complete Mermaid catalogue", async () => {
   const editor = await readFile(new URL("../app/mermaid-editor.tsx", import.meta.url), "utf8");
 
   assert.match(editor, /FLOWCHART_SHAPE_GROUPS\.map/);
@@ -251,7 +274,7 @@ test("offers best-practice flowchart shapes before the complete Mermaid catalog"
   assert.match(editor, /flowchartShapePatch\(event\.target\.value\)/);
 });
 
-test("normalizes specialized Mermaid SVG rendering without changing source", async () => {
+test("normalises specialised Mermaid SVG rendering without changing source", async () => {
   const [editor, rendering] = await Promise.all([
     readFile(new URL("../app/mermaid-editor.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/mermaid-rendering.ts", import.meta.url), "utf8"),
@@ -306,15 +329,19 @@ test("uses current Node 24 GitHub Pages actions without a provisioning-only conf
   assert.match(workflow, /actions\/setup-node@v6/);
   assert.match(workflow, /actions\/upload-pages-artifact@v5/);
   assert.match(workflow, /actions\/deploy-pages@v5/);
+  assert.match(workflow, /run: npm run lint/);
+  assert.match(workflow, /run: npm test/);
+  assert.match(workflow, /run: npm run build:pages/);
   assert.doesNotMatch(workflow, /actions\/configure-pages/);
 });
 
-test("declares the CC BY-NC-SA 4.0 repository license", async () => {
+test("declares the source-specific PolyForm noncommercial repository licence", async () => {
   const [license, packageJson] = await Promise.all([
     readFile(new URL("../LICENSE", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
   ]);
 
-  assert.match(license, /Creative Commons Attribution-NonCommercial-ShareAlike 4\.0 International/);
-  assert.equal(JSON.parse(packageJson).license, "CC-BY-NC-SA-4.0");
+  assert.match(license, /PolyForm Noncommercial License 1\.0\.0/);
+  assert.match(license, /Required Notice: Copyright © 2026 Colin Alexander Duffy\./);
+  assert.equal(JSON.parse(packageJson).license, "PolyForm-Noncommercial-1.0.0");
 });

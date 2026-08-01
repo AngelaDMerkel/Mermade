@@ -102,7 +102,7 @@ export function createRepairProposals(source: string, selectedVersion: RepairVer
   const normalized = normalizeTypography(withoutFence);
   if (normalized !== withoutFence) add(proposals, {
     id: "normalize-punctuation",
-    title: "Normalize pasted punctuation",
+    title: "Normalise pasted punctuation",
     description: "Replace smart quotes, non-breaking spaces, and visual arrows with Mermaid syntax.",
     confidence: "high",
     category: "syntax",

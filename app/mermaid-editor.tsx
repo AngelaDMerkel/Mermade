@@ -135,7 +135,7 @@ const ONBOARDING_KEY = "mermade-onboarding-v1";
 const GITHUB_URL = "https://github.com/AngelaDMerkel/Mermade";
 const PUBLIC_BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH || "";
 const MODERN_THEME_OPTIONS: Array<{ value: MermaidTheme; label: string }> = [
-  { value: "base", label: "Base — customizable" },
+  { value: "base", label: "Base — customisable" },
   { value: "default", label: "Default" },
   { value: "neutral", label: "Neutral" },
   { value: "forest", label: "Forest" },
@@ -144,8 +144,8 @@ const MODERN_THEME_OPTIONS: Array<{ value: MermaidTheme; label: string }> = [
   { value: "neo-dark", label: "Neo Dark" },
   { value: "redux", label: "Redux" },
   { value: "redux-dark", label: "Redux Dark" },
-  { value: "redux-color", label: "Redux Color" },
-  { value: "redux-dark-color", label: "Redux Dark Color" },
+  { value: "redux-color", label: "Redux Colour" },
+  { value: "redux-dark-color", label: "Redux Dark Colour" },
   { value: "null", label: "None" },
 ];
 const LEGACY_THEME_OPTIONS = MODERN_THEME_OPTIONS.filter(({ value }) => ["base", "default", "neutral", "forest", "dark", "null"].includes(value));
@@ -209,7 +209,7 @@ function simpleSourceDiff(before: string, after: string) {
   const afterLines = after.split(/\r?\n/);
   const removed = beforeLines.filter((line) => !afterLines.includes(line)).map((line) => `− ${line}`);
   const added = afterLines.filter((line) => !beforeLines.includes(line)).map((line) => `+ ${line}`);
-  return [...removed.slice(0, 8), ...added.slice(0, 8)].join("\n") || "Source formatting will be normalized.";
+  return [...removed.slice(0, 8), ...added.slice(0, 8)].join("\n") || "Source formatting will be normalised.";
 }
 
 function detectMermaidVersion(source: string) {
@@ -290,15 +290,15 @@ const initialDiagram: Diagram = {
   style: DEFAULT_DIAGRAM_STYLE,
   groups: [
     { id: "checkout", label: "Checkout" },
-    { id: "fulfillment", label: "Fulfillment" },
+    { id: "fulfilment", label: "Fulfilment" },
   ],
   nodes: [
     { id: "cart", label: "Cart", x: 78, y: 276, width: 126, height: 58, shape: "rounded", color: "#fffdfa", textColor: "#24232a" },
     { id: "details", label: "Customer details", x: 292, y: 182, width: 164, height: 62, shape: "rectangle", color: "#fde8f1", textColor: "#282332", groupId: "checkout" },
     { id: "payment", label: "Payment", x: 292, y: 332, width: 164, height: 62, shape: "rectangle", color: "#e9f2ff", textColor: "#242b36", groupId: "checkout" },
     { id: "approved", label: "Approved?", x: 535, y: 257, width: 110, height: 96, shape: "diamond", color: "#fff1da", textColor: "#332b20" },
-    { id: "order", label: "Create order", x: 730, y: 182, width: 160, height: 62, shape: "rectangle", color: "#e6f8f1", textColor: "#1f2e28", groupId: "fulfillment" },
-    { id: "email", label: "Send confirmation", x: 730, y: 332, width: 160, height: 62, shape: "rectangle", color: "#e8f8fb", textColor: "#1e2f32", groupId: "fulfillment" },
+    { id: "order", label: "Create order", x: 730, y: 182, width: 160, height: 62, shape: "rectangle", color: "#e6f8f1", textColor: "#1f2e28", groupId: "fulfilment" },
+    { id: "email", label: "Send confirmation", x: 730, y: 332, width: 160, height: 62, shape: "rectangle", color: "#e8f8fb", textColor: "#1e2f32", groupId: "fulfilment" },
     { id: "done", label: "Done", x: 976, y: 276, width: 76, height: 76, shape: "circle", color: "#24232a", textColor: "#ffffff" },
   ],
   edges: [
@@ -839,7 +839,7 @@ export function MermaidEditor() {
         });
         const renderId = `mermade-view-${mermaidRenderCounter.current++}`;
         // Use a temporary non-React container. Block Diagram measures live DOM,
-        // while its debug serialization cannot traverse React's circular metadata.
+        // while its debug serialisation cannot traverse React's circular metadata.
         const { svg } = await renderMermaidSvg(mermaid, renderId, source);
         if (cancelled) return;
 
@@ -1898,8 +1898,8 @@ export function MermaidEditor() {
                   </div>
                 ) : (
                   <div className="field-stack">
-                    <label><span>Fill color</span><div className="swatches">{COLORS.map((color) => <button key={color} className={selectedNode.color === color ? "selected" : ""} type="button" aria-label={`Use ${color}`} style={{ background: color }} onClick={() => updateNode(selectedNode.id, { color })}>{selectedNode.color === color && <Check size={14} />}</button>)}</div></label>
-                    <label><span>Text color</span><div className="color-input"><input type="color" value={selectedNode.textColor} onChange={(event) => updateNode(selectedNode.id, { textColor: event.target.value }, false)} /><input value={selectedNode.textColor} onChange={(event) => updateNode(selectedNode.id, { textColor: event.target.value }, false)} /></div></label>
+                    <label><span>Fill colour</span><div className="swatches">{COLORS.map((color) => <button key={color} className={selectedNode.color === color ? "selected" : ""} type="button" aria-label={`Use ${color}`} style={{ background: color }} onClick={() => updateNode(selectedNode.id, { color })}>{selectedNode.color === color && <Check size={14} />}</button>)}</div></label>
+                    <label><span>Text colour</span><div className="color-input"><input type="color" value={selectedNode.textColor} onChange={(event) => updateNode(selectedNode.id, { textColor: event.target.value }, false)} /><input value={selectedNode.textColor} onChange={(event) => updateNode(selectedNode.id, { textColor: event.target.value }, false)} /></div></label>
                     <div className="style-preview" style={{ background: selectedNode.color, color: selectedNode.textColor }}>Aa <span>Live preview</span></div>
                   </div>
                 )}
@@ -2012,14 +2012,16 @@ export function MermaidEditor() {
               <button type="button" onClick={() => setHelpOpen(false)}>Done</button>
             </header>
             <div className="help-content">
-              <section className="help-section help-intro">
-                <span>When to use it</span>
-                <p>{activeHelp.purpose}</p>
+              <section className="help-overview-card purpose">
+                <header><Workflow size={14} /><span>When to use</span></header>
+                <div><p>{activeHelp.purpose}</p></div>
               </section>
-              <section className="help-section help-editing">
-                <span>Editing in Mermade</span>
-                <p>{visualEditingHelp}</p>
-                <button className="wide-action" type="button" onClick={() => { setHelpOpen(false); setTourStep(0); writeStoredValue(ONBOARDING_KEY, "complete"); }}>Restart interface tour</button>
+              <section className="help-overview-card editing">
+                <header><MousePointer2 size={14} /><span>Editing in Mermade</span></header>
+                <div>
+                  <p>{visualEditingHelp}</p>
+                  <button className="wide-action" type="button" onClick={() => { setHelpOpen(false); setTourStep(0); writeStoredValue(ONBOARDING_KEY, "complete"); }}>Restart interface tour</button>
+                </div>
               </section>
               <section className="help-section help-quick-start">
                 <span>Quick start</span>
@@ -2099,7 +2101,7 @@ export function MermaidEditor() {
             <div className="settings-content">
               <div className="settings-section">
                 <span className="settings-label">Appearance</span>
-                <div className="theme-options" aria-label="Color theme">
+                <div className="theme-options" aria-label="Colour theme">
                   <button className={preferences.theme === "light" ? "active" : ""} type="button" onClick={() => setPreferences((current) => ({ ...current, theme: "light" }))}><Sun size={17} /><span>Light</span></button>
                   <button className={preferences.theme === "dark" ? "active" : ""} type="button" onClick={() => setPreferences((current) => ({ ...current, theme: "dark" }))}><Moon size={17} /><span>Dark</span></button>
                   <button className={preferences.theme === "system" ? "active" : ""} type="button" onClick={() => setPreferences((current) => ({ ...current, theme: "system" }))}><Monitor size={17} /><span>System</span></button>

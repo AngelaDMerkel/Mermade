@@ -35,7 +35,7 @@ before(async () => {
 });
 
 test("every selectable flowchart shape parses and renders", { timeout: 120_000 }, async (t) => {
-  assert.equal(shapes.length, 48, "the complete Mermaid shape catalog must be tested");
+  assert.equal(shapes.length, 48, "the complete Mermaid shape catalogue must be tested");
 
   for (const shape of shapes) {
     await t.test(shape.label, async () => {
@@ -90,8 +90,8 @@ test("every Mermaid type starter meets the SVG rendering standard", { timeout: 1
 
       if (type.id === "c4") {
         assert.ok(rendered.c4Title, "C4 must render its title as a direct SVG text element");
-        assert.equal(rendered.c4Title.textAnchor, "middle", "C4 title must be center-aligned");
-        assert.ok(Math.abs(rendered.c4Title.x - rendered.c4Title.expectedX) < 0.01, "C4 title must be centered in its viewBox");
+        assert.equal(rendered.c4Title.textAnchor, "middle", "C4 title must be centre-aligned");
+        assert.ok(Math.abs(rendered.c4Title.x - rendered.c4Title.expectedX) < 0.01, "C4 title must be centred in its viewBox");
       }
     });
   }
@@ -162,7 +162,7 @@ test("double-clicking an unselected Mermaid flowchart node opens text editing", 
   page = undefined;
   server = undefined;
 
-  appServer = spawn(process.execPath, ["node_modules/next/dist/bin/next", "dev", "--hostname", "127.0.0.1", "--port", "0"], {
+  appServer = spawn(process.execPath, ["node_modules/next/dist/bin/next", "start", "--hostname", "127.0.0.1", "--port", "0"], {
     cwd: fileURLToPath(new URL("..", import.meta.url)),
     env: process.env,
     stdio: ["ignore", "pipe", "pipe"],
@@ -170,13 +170,15 @@ test("double-clicking an unselected Mermaid flowchart node opens text editing", 
 
   const port = await new Promise((resolve, reject) => {
     let output = "";
+    let detectedPort;
     const timeout = setTimeout(() => reject(new Error(`Mermade interaction server did not start\n${output}`)), 30_000);
     const inspect = (chunk) => {
       output += chunk.toString();
       const match = output.match(/Local:\s+http:\/\/(?:localhost|127\.0\.0\.1):(\d+)/i);
-      if (!match) return;
+      if (match) detectedPort = Number(match[1]);
+      if (!detectedPort || !/Ready in/i.test(output)) return;
       clearTimeout(timeout);
-      resolve(Number(match[1]));
+      resolve(detectedPort);
     };
     appServer.stdout.on("data", inspect);
     appServer.stderr.on("data", inspect);

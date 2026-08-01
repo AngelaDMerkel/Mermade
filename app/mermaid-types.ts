@@ -30,7 +30,7 @@ export const MERMAID_DIAGRAM_TYPES: MermaidDiagramType[] = [
   { id: "zenuml", label: "ZenUML", family: "structured", declaration: /^zenuml\b/i, template: "zenuml\n  Controller.Get(id) {\n    result = Service.Get(id)\n    return result\n  }" },
   { id: "packet", label: "Packet", family: "structured", declaration: /^packet(?:-beta)?\b/i, template: "packet-beta\n  0-15: \"Source Port\"\n  16-31: \"Destination Port\"" },
   { id: "kanban", label: "Kanban", family: "structured", declaration: /^kanban\b/i, template: "kanban\n  todo[Todo]\n    task1[First task]\n  done[Done]" },
-  { id: "eventmodeling", label: "Event Modeling", family: "structured", declaration: /^eventmodeling\b/i, template: "eventmodeling\n  tf 01 ui CartUI\n  tf 02 cmd AddItem\n  tf 03 evt ItemAdded" },
+  { id: "eventmodeling", label: "Event Modelling", family: "structured", declaration: /^eventmodeling\b/i, template: "eventmodeling\n  tf 01 ui CartUI\n  tf 02 cmd AddItem\n  tf 03 evt ItemAdded" },
   { id: "railroad", label: "Railroad", family: "structured", declaration: /^railroad-beta\b/i, template: "railroad-beta\n  expression = sequence(terminal(\"if\"), nonterminal(\"condition\"));" },
   { id: "railroadEbnf", label: "Railroad EBNF", family: "structured", declaration: /^railroad-ebnf-beta\b/i, template: "railroad-ebnf-beta\n  expression = term, { (\"+\" | \"-\"), term };" },
   { id: "railroadAbnf", label: "Railroad ABNF", family: "structured", declaration: /^railroad-abnf-beta\b/i, template: "railroad-abnf-beta\n  digit = %x30-39;" },
