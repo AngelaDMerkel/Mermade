@@ -17,7 +17,7 @@
   <img alt="Local-first static application" src="https://img.shields.io/badge/deployment-static%20%26%20local--first-24232a">
 </p>
 
-Mermade is a modern, browser-based visual editor for [Mermaid](https://github.com/mermaid-js/mermaid). It grew out of a practical need: I produce a large amount of documentation for my work and, alongside the rise of AI and RAG, wanted a tool that made Mermaid fast and approachable enough for colleagues to use as well. Mermade helps it get made (heh).
+Mermade is a modern, browser-based visual editor for [Mermaid](https://github.com/mermaid-js/mermaid). It grew out of a practical need: I produce a large amount of documentation for my work, and alongside the rise of AI and RAG, wanted a tool that made Mermaid fast and approachable enough for colleagues to use as well. Mermade helps it get made (heh).
 
 Mermade runs entirely locally, and project storage remains in the browser.
 
