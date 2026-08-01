@@ -38,6 +38,7 @@ import {
   PointerEvent as ReactPointerEvent,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -525,6 +526,7 @@ export function MermaidEditor() {
   const [editingNode, setEditingNode] = useState<string | null>(null);
   const [editingGroup, setEditingGroup] = useState<string | null>(null);
   const [mermaidSize, setMermaidSize] = useState({ width: 1200, height: 800 });
+  const [mermaidRenderRevision, setMermaidRenderRevision] = useState(0);
   const [mermaidRenderError, setMermaidRenderError] = useState("");
   const [invalidSource, setInvalidSource] = useState("");
   const [syntaxError, setSyntaxError] = useState("");
@@ -881,10 +883,9 @@ export function MermaidEditor() {
         });
 
         setMermaidSize({ width, height });
+        setMermaidRenderRevision((revision) => revision + 1);
         setMermaidRenderError("");
-        if (pendingViewAnchorRef.current?.targetView === "mermaid") {
-          requestAnimationFrame(() => requestAnimationFrame(() => restoreViewAnchor("mermaid")));
-        } else if (shouldFitMermaidRef.current && scrollRef.current) {
+        if (pendingViewAnchorRef.current?.targetView !== "mermaid" && shouldFitMermaidRef.current && scrollRef.current) {
           shouldFitMermaidRef.current = false;
           const scroller = scrollRef.current;
           const nextZoom = clampZoom(Math.min(scroller.clientWidth / (width + 180), scroller.clientHeight / (height + 180), 1.35));
@@ -906,6 +907,12 @@ export function MermaidEditor() {
       window.clearTimeout(timer);
     };
   }, [activeDiagramType.id, activeMermaidVersion, diagramStyle.layout, restoreViewAnchor, source, viewMode]);
+
+  useLayoutEffect(() => {
+    if (!mermaidRenderRevision || viewMode !== "mermaid" || pendingViewAnchorRef.current?.targetView !== "mermaid") return;
+    const frame = requestAnimationFrame(() => restoreViewAnchor("mermaid"));
+    return () => cancelAnimationFrame(frame);
+  }, [mermaidRenderRevision, restoreViewAnchor, viewMode]);
 
   useEffect(() => {
     if (viewMode !== "mermaid" || !mermaidViewRef.current) return;

@@ -168,15 +168,15 @@ test("double-clicking an unselected Mermaid flowchart node opens text editing", 
     stdio: ["ignore", "pipe", "pipe"],
   });
 
+  let appServerOutput = "";
   const port = await new Promise((resolve, reject) => {
-    let output = "";
     let detectedPort;
-    const timeout = setTimeout(() => reject(new Error(`Mermade interaction server did not start\n${output}`)), 30_000);
+    const timeout = setTimeout(() => reject(new Error(`Mermade interaction server did not start\n${appServerOutput}`)), 30_000);
     const inspect = (chunk) => {
-      output += chunk.toString();
-      const match = output.match(/Local:\s+http:\/\/(?:localhost|127\.0\.0\.1):(\d+)/i);
+      appServerOutput += chunk.toString();
+      const match = appServerOutput.match(/Local:\s+http:\/\/(?:localhost|127\.0\.0\.1):(\d+)/i);
       if (match) detectedPort = Number(match[1]);
-      if (!detectedPort || !/Ready in/i.test(output)) return;
+      if (!detectedPort || !/Ready in/i.test(appServerOutput)) return;
       clearTimeout(timeout);
       resolve(detectedPort);
     };
@@ -184,16 +184,38 @@ test("double-clicking an unselected Mermaid flowchart node opens text editing", 
     appServer.stderr.on("data", inspect);
     appServer.once("exit", (code) => {
       clearTimeout(timeout);
-      reject(new Error(`Mermade interaction server exited with ${code}\n${output}`));
+      reject(new Error(`Mermade interaction server exited with ${code}\n${appServerOutput}`));
     });
   });
+
+  const appUrl = `http://127.0.0.1:${port}`;
+  const readinessDeadline = Date.now() + 30_000;
+  let readinessError;
+  for (;;) {
+    if (appServer.exitCode !== null || appServer.signalCode) {
+      throw new Error(`Mermade interaction server exited before accepting connections\n${appServerOutput}`);
+    }
+    try {
+      const response = await fetch(appUrl, { signal: AbortSignal.timeout(2_000) });
+      await response.arrayBuffer();
+      if (response.ok) break;
+      readinessError = new Error(`HTTP ${response.status}`);
+    } catch (error) {
+      readinessError = error;
+    }
+    if (Date.now() >= readinessDeadline) {
+      const reason = readinessError instanceof Error ? readinessError.message : String(readinessError);
+      throw new Error(`Mermade interaction server did not accept connections: ${reason}\n${appServerOutput}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
 
   browser = await chromium.launch({
     ...(process.env.CHROME_PATH ? { executablePath: process.env.CHROME_PATH } : { channel: "chrome" }),
     headless: true,
   });
   page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
-  await page.goto(`http://127.0.0.1:${port}`);
+  await page.goto(appUrl);
   const welcome = page.locator(".welcome-dialog");
   await welcome.waitFor({ state: "visible" });
   assert.equal(await welcome.locator("h1").textContent(), "Make Mermaid diagrams without losing the Mermaid.");
