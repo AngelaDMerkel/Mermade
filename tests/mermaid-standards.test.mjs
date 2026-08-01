@@ -164,7 +164,7 @@ test("double-clicking an unselected Mermaid flowchart node opens text editing", 
 
   appServer = spawn(process.execPath, ["node_modules/next/dist/bin/next", "start", "--hostname", "127.0.0.1", "--port", "0"], {
     cwd: fileURLToPath(new URL("..", import.meta.url)),
-    env: process.env,
+    env: { ...process.env, NODE_ENV: "production" },
     stdio: ["ignore", "pipe", "pipe"],
   });
 

@@ -292,14 +292,18 @@ test("ships the approved Mermaid-pink brand assets", async () => {
 });
 
 test("keeps public assets under the GitHub Pages base path", async () => {
-  const [config, layout, editor, css] = await Promise.all([
+  const [config, layout, editor, css, packageText] = await Promise.all([
     readFile(new URL("../next.config.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/mermaid-editor.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+    readFile(new URL("../package.json", import.meta.url), "utf8"),
   ]);
 
   assert.match(config, /NEXT_PUBLIC_BASE_PATH: basePath/);
+  assert.match(config, /process\.env\.MERMADE_GITHUB_PAGES/);
+  assert.doesNotMatch(config, /process\.env\.GITHUB_ACTIONS/);
+  assert.match(JSON.parse(packageText).scripts["build:pages"], /MERMADE_GITHUB_PAGES=true/);
   assert.match(layout, /publicBasePath/);
   assert.match(editor, /PUBLIC_BASE_PATH/);
   assert.doesNotMatch(css, /url\(["']\/brand\//);

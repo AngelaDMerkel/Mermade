@@ -10,7 +10,7 @@
     "patch:mermaid": "node scripts/patch-mermaid-block-renderer.mjs",
     "dev": "npm run patch:mermaid && next dev",
     "build": "npm run patch:mermaid && next build",
-    "build:pages": "npm run patch:mermaid && GITHUB_ACTIONS=true next build",
+    "build:pages": "npm run patch:mermaid && MERMADE_GITHUB_PAGES=true next build",
     "start": "next start",
     "test": "MERMADE_TEST_BUILD=true npm run build && MERMADE_TEST_BUILD=true node --test tests/*.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern .next-test"

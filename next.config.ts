@@ -1,6 +1,6 @@
 import type { NextConfig } from "next";
 
-const isGitHubPages = process.env.GITHUB_ACTIONS === "true";
+const isGitHubPages = process.env.MERMADE_GITHUB_PAGES === "true";
 const isTestBuild = process.env.MERMADE_TEST_BUILD === "true";
 const repositoryName = process.env.GITHUB_REPOSITORY?.split("/")[1] || "mermade";
 const basePath = isGitHubPages ? `/${repositoryName}` : "";
