@@ -78,7 +78,7 @@ Candidate edits are parsed by the selected Mermaid engine before they are commit
 
 ## Feature gallery
 
-These are real Mermade browser captures at 1600 × 1000, not reconstructed mockups. Select any image to inspect the full-resolution version. Vector SVG remains the preferred format for the title card, brand assets, and explanatory diagrams where the interface itself is not the subject.
+Mermaid is designed to have a wide feature-set while retaining a familiar and approachable interface. This screenshot gallery highlights a few of the standout features. 
 
 <table>
   <tr>
