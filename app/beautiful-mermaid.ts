@@ -176,9 +176,44 @@ function sanitiseSvgMarkup(markup: string) {
       }
     }
   });
+  svg.querySelectorAll<SVGElement>(".node").forEach((node) => {
+    const shape = node.querySelector<SVGElement>(":scope > rect, :scope > polygon, :scope > path, :scope > circle, :scope > ellipse");
+    const readableText = readablePolishedTextColour(shape?.getAttribute("fill") || "");
+    if (!readableText) return;
+    node.querySelectorAll<SVGTextElement>("text").forEach((label) => {
+      if (!/^var\(--_text(?:\)|[-_])/.test(label.getAttribute("fill") || "")) return;
+      label.setAttribute("fill", readableText);
+      label.setAttribute("data-mermade-contrast", "auto");
+    });
+  });
   svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
   svg.setAttribute("data-renderer", "beautiful-mermaid");
   return svg.outerHTML;
+}
+
+function colourChannels(colour: string) {
+  const value = colour.trim();
+  const hex = value.match(/^#([\da-f]{3}|[\da-f]{6})$/i)?.[1];
+  if (hex) {
+    const expanded = hex.length === 3 ? [...hex].map((digit) => digit + digit).join("") : hex;
+    return [0, 2, 4].map((index) => Number.parseInt(expanded.slice(index, index + 2), 16));
+  }
+  const rgb = value.match(/^rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)/i);
+  return rgb ? rgb.slice(1, 4).map((channel) => Math.max(0, Math.min(255, Number(channel)))) : null;
+}
+
+function relativeLuminance(channels: number[]) {
+  const linear = channels.map((channel) => {
+    const value = channel / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+}
+
+export function readablePolishedTextColour(fill: string) {
+  const channels = colourChannels(fill);
+  if (!channels) return null;
+  return relativeLuminance(channels) > 0.179 ? "#000000" : "#ffffff";
 }
 
 export async function renderPolishedSvg(source: string, style: PolishedStyle) {

@@ -160,3 +160,46 @@ test("renames and unwraps source-backed subgraphs without deleting their nodes",
   assert.match(unwrapped, /B\[Approve\]/);
   assert.match(unwrapped, /A --> B/);
 });
+
+test("finds source-backed nodes in compact relationships and expanded shapes", async () => {
+  const { flowchartNodeIds } = await loadFlowchartSourceHelpers();
+  const source = `flowchart TB
+  start-node@{ shape: stadium, label: "Start" }-->wait-node@{ shape: delay, label: "Wait" }
+  orphan-node@{ shape: lean-l, label: "Orphan" }`;
+
+  assert.deepEqual(
+    [...flowchartNodeIds(source)].sort(),
+    ["orphan-node", "start-node", "wait-node"],
+  );
+});
+
+test("deletes compact source-backed relationships and their orphaned node", async () => {
+  const { removeFlowchartItems } = await loadFlowchartSourceHelpers();
+  const source = `flowchart TB
+  start-node@{ shape: stadium, label: "Start" }-->orphan-node@{ shape: delay, label: "Wait" }
+  keep-node@{ shape: rect, label: "Keep" }`;
+
+  const updated = removeFlowchartItems(source, { nodeIds: ["orphan-node"] });
+
+  assert.match(updated, /start-node@\{ shape: stadium/);
+  assert.match(updated, /keep-node@\{ shape: rect/);
+  assert.doesNotMatch(updated, /orphan-node/);
+});
+
+test("removes an empty subgraph frame when its final orphan is deleted", async () => {
+  const { removeFlowchartItems } = await loadFlowchartSourceHelpers();
+  const source = `flowchart TB
+  subgraph waiting["Waiting"]
+    direction LR
+    %% this explanation remains useful
+    orphan@{ shape: delay, label: "Wait" }
+  end
+  keep[Keep]`;
+
+  const updated = removeFlowchartItems(source, { nodeIds: ["orphan"] });
+
+  assert.doesNotMatch(updated, /subgraph waiting|^\s*end\s*$/m);
+  assert.doesNotMatch(updated, /^\s*direction\s+LR\s*$/m);
+  assert.match(updated, /%% this explanation remains useful/);
+  assert.match(updated, /keep\[Keep\]/);
+});

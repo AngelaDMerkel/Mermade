@@ -47,7 +47,7 @@ import {
 import { SemanticVisualEditor } from "./semantic-visual-editor";
 import { DEFAULT_POLISHED_STYLE, normalisePolishedStyle, POLISHED_THEME_OPTIONS, PolishedStyle, PolishedTheme, renderPolishedSvg, supportsPolishedDiagram } from "./beautiful-mermaid";
 import { layoutFlowchart } from "./flowchart-layout";
-import { appendFlowchartStatements, appendFlowchartSubgraph, canUseNativeFlowchartEditor, removeFlowchartItems, updateFlowchartDirection, updateFlowchartEdgeStatement, updateFlowchartNodeStatement, updateFlowchartSubgraphStatement } from "./flowchart-source";
+import { appendFlowchartStatements, appendFlowchartSubgraph, canUseNativeFlowchartEditor, flowchartNodeIds, removeFlowchartItems, updateFlowchartDirection, updateFlowchartEdgeStatement, updateFlowchartNodeStatement, updateFlowchartSubgraphStatement } from "./flowchart-source";
 import { layoutCompatibilityError } from "./layout-compatibility";
 import { flowchartShapePatch, FLOWCHART_SHAPE_GROUPS, FlowchartVisualShape, mermaidShapeClass, selectedFlowchartShape, visualShapeForMermaid } from "./flowchart-shapes";
 import { diagramNameFromFile, MERMAID_IMPORT_ACCEPT, readImportedMermaid } from "./mermaid-import";
@@ -107,9 +107,14 @@ function renderedSelectionId(element: HTMLElement, diagram: Diagram) {
     || diagram.groups.some((group) => group.id === modelId)
   ));
   if (belongsToModel) return modelId;
+  // Source-authoritative flowcharts can render valid Mermaid nodes that the
+  // tolerant FreeForm model does not understand. Keep their Mermaid identity
+  // so visual deletion can remove the node and every relationship referencing
+  // it, rather than selecting only the declaration line beneath the pointer.
+  if (modelId) return modelId;
   const line = Number(element.dataset.sourceLine);
   if (element.dataset.sourceLine !== undefined && Number.isInteger(line)) return sourceLineSelection(line);
-  return modelId;
+  return undefined;
 }
 
 function renderedModelElement(target: Element, diagram: Diagram) {
@@ -128,14 +133,18 @@ function renderedModelElement(target: Element, diagram: Diagram) {
 
 function renderedInteractionElement(target: Element, diagram: Diagram) {
   return renderedModelElement(target, diagram)
-    || target.closest<HTMLElement>("[data-source-line]")
-    || target.closest<HTMLElement>("[data-node-id], [data-edge-id], [data-group-id]");
+    || target.closest<HTMLElement>("[data-node-id], [data-edge-id], [data-group-id]")
+    || target.closest<HTMLElement>("[data-source-line]");
 }
 
 function toggleRenderedSelection(element: HTMLElement, selected: boolean) {
   element.classList.toggle("selected", selected);
   if (!element.dataset.nodeId) return;
-  element.querySelectorAll<SVGElement>(":scope > rect, :scope > circle, :scope > ellipse, :scope > polygon, :scope > path, .label-container").forEach((shape) => {
+  element.querySelectorAll<SVGElement>(
+    ":scope > rect:not(.mermade-node-hit), :scope > circle, :scope > ellipse, :scope > polygon, :scope > path, "
+    + ":scope > .label-container rect, :scope > .label-container circle, :scope > .label-container ellipse, "
+    + ":scope > .label-container polygon, :scope > .label-container path",
+  ).forEach((shape) => {
     const storedOutline = shape.dataset.mermadeSelectionOutline;
     if (selected) {
       if (storedOutline === undefined) {
@@ -498,11 +507,11 @@ function parseMermaid(source: string, previous: Diagram): Diagram | null {
   let currentGroup: string | undefined;
 
   const legacyPatterns: Array<[NodeShape, RegExp]> = [
-    ["rounded", /^(\w+)\(\["?(.*?)"?\]\)$/],
-    ["circle", /^(\w+)\(\("?(.*?)"?\)\)$/],
-    ["hexagon", /^(\w+)\{\{"?(.*?)"?\}\}$/],
-    ["diamond", /^(\w+)\{"?(.*?)"?\}$/],
-    ["rectangle", /^(\w+)\["?(.*?)"?\]$/],
+    ["rounded", /^([A-Za-z_][\w-]*)\(\["?(.*?)"?\]\)$/],
+    ["circle", /^([A-Za-z_][\w-]*)\(\("?(.*?)"?\)\)$/],
+    ["hexagon", /^([A-Za-z_][\w-]*)\{\{"?(.*?)"?\}\}$/],
+    ["diamond", /^([A-Za-z_][\w-]*)\{"?(.*?)"?\}$/],
+    ["rectangle", /^([A-Za-z_][\w-]*)\["?(.*?)"?\]$/],
   ];
 
   const shapeFromMermaid = (shape: string): NodeShape => {
@@ -532,7 +541,7 @@ function parseMermaid(source: string, previous: Diagram): Diagram | null {
 
   const parseNode = (value: string, explicit = true) => {
     const text = value.trim();
-    const expanded = text.match(/^(\w+)@\{\s*(.*?)\s*\}$/);
+    const expanded = text.match(/^([A-Za-z_][\w-]*)@\{\s*(.*?)\s*\}$/);
     if (expanded) {
       const shape = expanded[2].match(/\bshape\s*:\s*["']?([\w-]+)["']?/)?.[1] || "rect";
       const label = expanded[2].match(/\blabel\s*:\s*"((?:\\.|[^"])*)"/)?.[1]?.replaceAll('\\"', '"') || expanded[1];
@@ -546,7 +555,7 @@ function parseMermaid(source: string, previous: Diagram): Diagram | null {
         return match[1];
       }
     }
-    const plain = text.match(/^(\w+)$/);
+    const plain = text.match(/^([A-Za-z_][\w-]*)$/);
     if (plain) {
       addNode(plain[1], plain[1], "rectangle", false);
       return plain[1];
@@ -571,7 +580,7 @@ function parseMermaid(source: string, previous: Diagram): Diagram | null {
   };
 
   const parseEdgeLine = (line: string) => {
-    const connectorPattern = /\s+(--\s*"([^"]*)"\s*-->|(?:-->|---)\|"?([^|]*?)"?\||-\.->|-\.-|==>|===|-->|---)\s+/g;
+    const connectorPattern = /(--\s*"([^"]*)"\s*-->|(?:-->|---)\|"?([^|]*?)"?\||-\.->|-\.-|==>|===|-->|---)/g;
     const connectors = [...line.matchAll(connectorPattern)];
     if (!connectors.length) return false;
     const operands: string[] = [];
@@ -593,7 +602,7 @@ function parseMermaid(source: string, previous: Diagram): Diagram | null {
 
   lines.forEach((line) => {
     if (line === header || line.startsWith("%%") || /^direction\s+(LR|RL|TB|TD|BT)$/.test(line)) return;
-    const groupMatch = line.match(/^subgraph\s+(\w+)\["?(.*?)"?\]$/);
+    const groupMatch = line.match(/^subgraph\s+([A-Za-z_][\w-]*)\["?(.*?)"?\]$/);
     if (groupMatch) {
       currentGroup = groupMatch[1];
       groups.push({ id: groupMatch[1], label: groupMatch[2] });
@@ -603,7 +612,7 @@ function parseMermaid(source: string, previous: Diagram): Diagram | null {
       currentGroup = undefined;
       return;
     }
-    const styleMatch = line.match(/^style\s+(\w+)\s+fill:(#[\da-fA-F]{6}).*color:(#[\da-fA-F]{6})/);
+    const styleMatch = line.match(/^style\s+([A-Za-z_][\w-]*)\s+fill:(#[\da-fA-F]{6}).*color:(#[\da-fA-F]{6})/);
     if (styleMatch) {
       styles.set(styleMatch[1], { color: styleMatch[2], textColor: styleMatch[3] });
       return;
@@ -1037,7 +1046,10 @@ export function MermaidEditor() {
         const height = Math.max(320, Math.ceil(viewBox?.height || 800));
 
         const renderedDiagram = diagramRef.current;
-        const nodeIds = renderedDiagram.nodes.map((node) => node.id).sort((a, b) => b.length - a.length);
+        const nodeIds = [...new Set([
+          ...renderedDiagram.nodes.map((node) => node.id),
+          ...(activeDiagramType.id === "flowchart" ? flowchartNodeIds(source) : []),
+        ])].sort((a, b) => b.length - a.length);
         host.querySelectorAll<HTMLElement>(".node").forEach((element) => {
           const id = nodeIds.find((nodeId) => element.id === nodeId || element.id.includes(`-${nodeId}-`) || element.id.endsWith(`-${nodeId}`));
           if (id) element.dataset.nodeId = id;
@@ -1105,7 +1117,10 @@ export function MermaidEditor() {
 
         host.innerHTML = svg;
         const svgElement = host.querySelector("svg");
-        if (svgElement) decorateRenderedStatements(svgElement, source);
+        if (svgElement) {
+          decorateRenderedStatements(svgElement, source);
+          host.style.backgroundColor = svgElement.style.getPropertyValue("--bg").trim() || "transparent";
+        }
         const viewBox = svgElement?.viewBox.baseVal;
         const width = Math.max(480, Math.ceil(viewBox?.width || 1200));
         const height = Math.max(320, Math.ceil(viewBox?.height || 800));
@@ -1141,6 +1156,7 @@ export function MermaidEditor() {
       } catch (error) {
         if (cancelled) return;
         host.replaceChildren();
+        host.style.removeProperty("background-color");
         setPolishedRenderError(error instanceof Error ? error.message : "Unable to render this diagram in Beautiful view");
       }
     };
@@ -1307,9 +1323,20 @@ export function MermaidEditor() {
   const deleteSelected = async () => {
     if (!selected.length) return;
     const ids = new Set(selected);
-    const nodeIds = diagram.nodes.filter((node) => ids.has(node.id)).map((node) => node.id);
     const selectedEdges = diagram.edges.filter((edge) => ids.has(edge.id));
     const subgraphIds = diagram.groups.filter((group) => ids.has(group.id)).map((group) => group.id);
+    const edgeIds = new Set(selectedEdges.map((edge) => edge.id));
+    const groupIds = new Set(subgraphIds);
+    const sourceNodeIds = diagram.source && activeDiagramType.id === "flowchart"
+      ? flowchartNodeIds(diagram.source)
+      : new Set<string>();
+    const nodeIds = [...new Set([
+      ...diagram.nodes.filter((node) => ids.has(node.id)).map((node) => node.id),
+      ...selected.filter((id) => !id.startsWith(SOURCE_LINE_SELECTION_PREFIX)
+        && !edgeIds.has(id)
+        && !groupIds.has(id)
+        && sourceNodeIds.has(id)),
+    ])];
     const sourceLines = selected.map(sourceLineFromSelection).filter((line) => line >= 0);
     let candidate = diagram.source;
     if (candidate !== undefined && sourceLines.length) {
@@ -2314,7 +2341,13 @@ export function MermaidEditor() {
               <div
                 ref={mermaidStageRef}
                 className={`mermaid-stage ${viewMode === "polished" ? "polished-stage" : ""}`}
-                style={{ left: CANVAS_MARGIN * zoom, top: CANVAS_MARGIN * zoom, width: renderedSize.width, height: renderedSize.height, transform: `scale(${zoom})` }}
+                style={{
+                  left: `max(${CANVAS_MARGIN * zoom}px, calc((100% - ${renderedSize.width * zoom}px) / 2))`,
+                  top: `max(${CANVAS_MARGIN * zoom}px, calc((100% - ${renderedSize.height * zoom}px) / 2))`,
+                  width: renderedSize.width,
+                  height: renderedSize.height,
+                  transform: `scale(${zoom})`,
+                }}
                 onPointerDown={selectMermaidElement}
                 onDoubleClick={editMermaidElement}
               >

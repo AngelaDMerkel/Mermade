@@ -238,6 +238,7 @@ button { color: inherit; }
 .mermaid-render svg { display: block; width: 100% !important; height: 100% !important; max-width: none !important; overflow: visible; }
 .dokuwiki-mermaid .nodeLabel, .dokuwiki-mermaid .nodeLabel p { font-size: 12px !important; line-height: 1.5 !important; }
 .mermaid-render [data-node-id], .mermaid-render [data-edge-id], .mermaid-render [data-group-id], .mermaid-render [data-source-line] { cursor: pointer; }
+.mermaid-render .mermade-node-hit { fill: transparent !important; stroke: transparent !important; stroke-width: 14px !important; pointer-events: all; }
 .mermaid-render .mermaid-edge-hit { fill: none !important; stroke: transparent !important; stroke-width: 16px !important; pointer-events: stroke; }
 .mermaid-render [data-node-id].selected { filter: none; }
 .mermaid-render [data-node-id].selected > rect,
@@ -245,7 +246,11 @@ button { color: inherit; }
 .mermaid-render [data-node-id].selected > ellipse,
 .mermaid-render [data-node-id].selected > polygon,
 .mermaid-render [data-node-id].selected > path,
-.mermaid-render [data-node-id].selected .label-container { stroke: var(--purple) !important; stroke-width: 3.5px !important; }
+.mermaid-render [data-node-id].selected .label-container rect,
+.mermaid-render [data-node-id].selected .label-container circle,
+.mermaid-render [data-node-id].selected .label-container ellipse,
+.mermaid-render [data-node-id].selected .label-container polygon,
+.mermaid-render [data-node-id].selected .label-container path { stroke: var(--purple) !important; stroke-width: 3.5px !important; }
 .mermaid-render [data-edge-id].selected:not(.mermaid-edge-hit) { stroke: var(--purple) !important; stroke-width: 3px !important; }
 .mermaid-render [data-group-id].selected > rect { stroke: var(--purple) !important; stroke-width: 3px !important; fill: #fde8f1 !important; }
 .mermaid-render [data-group-id].selected .cluster-label { color: var(--purple-dark) !important; font-weight: 650; }

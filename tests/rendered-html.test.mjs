@@ -171,13 +171,28 @@ test("supports visible marquee selection in Mermaid view", async () => {
   assert.match(editor, /if \(tool === "marquee"\) event\.preventDefault\(\);/);
   assert.match(css, /\.canvas-viewport\.is-marquee, \.canvas-viewport\.is-marquee \* \{[^}]*user-select: none !important;/);
   assert.match(css, /\.mermaid-render \[data-node-id\]\.selected \{ filter: none; \}/);
-  assert.match(css, /\.mermaid-render \[data-node-id\]\.selected \.label-container \{[^}]*stroke: var\(--purple\) !important;[^}]*stroke-width: 3\.5px !important;/);
+  assert.match(css, /\.mermaid-render \[data-node-id\]\.selected \.label-container path \{[^}]*stroke: var\(--purple\) !important;[^}]*stroke-width: 3\.5px !important;/);
   assert.match(css, /\.diagram-node\.selected \.node-shape \{[^}]*border-color: var\(--purple\);[^}]*drop-shadow\(1px 0 0 var\(--purple\)\)[^}]*drop-shadow\(0 -1px 0 var\(--purple\)\)/);
   assert.doesNotMatch(css, /\.diagram-node\.selected \.node-shape \{[^}]*rgb\(224 9 95 \/ 15%\)/);
   assert.match(editor, /function toggleRenderedSelection\(element: HTMLElement, selected: boolean\)/);
   assert.match(editor, /shape\.style\.setProperty\("stroke", "var\(--purple\)", "important"\)/);
   assert.match(editor, /shape\.dataset\.mermadeSelectionOutline = JSON\.stringify/);
   assert.match(editor, /delete shape\.dataset\.mermadeSelectionOutline/);
+});
+
+test("keeps large ELK flowcharts centred, selectable, and source-deletable", async () => {
+  const [editor, rendering, css] = await Promise.all([
+    readFile(new URL("../app/mermaid-editor.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/mermaid-rendering.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(editor, /activeDiagramType\.id === "flowchart" \? flowchartNodeIds\(source\) : \[\]/);
+  assert.match(editor, /sourceNodeIds\.has\(id\)/);
+  assert.match(editor, /left: `max\([^`]+calc\(\(100% - \$\{renderedSize\.width \* zoom\}px\) \/ 2\)\)`/);
+  assert.match(rendering, /classList\.add\("mermade-node-hit"\)/);
+  assert.match(rendering, /\.node > \.label-container path/);
+  assert.match(css, /\.mermade-node-hit \{[^}]*fill: transparent !important;[^}]*pointer-events: all;/);
 });
 
 test("keeps rendered Mermaid nodes stable between click and double-click", async () => {
@@ -243,6 +258,8 @@ test("loads Beautiful Mermaid as a compatible third canvas without replacing can
   assert.match(adapter, /await import\("beautiful-mermaid"\)/);
   assert.match(adapter, /sourceForPolishedRenderer/);
   assert.match(adapter, /new DOMParser\(\)/);
+  assert.match(adapter, /data-mermade-contrast/);
+  assert.match(editor, /host\.style\.backgroundColor = svgElement\.style\.getPropertyValue\("--bg"\)\.trim\(\) \|\| "transparent"/);
   assert.equal(JSON.parse(packageJson).dependencies["beautiful-mermaid"], "^1.1.3");
 });
 

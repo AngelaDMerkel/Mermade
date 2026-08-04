@@ -444,6 +444,34 @@ test("Beautiful view lazy-renders a selectable, styled flowchart", { timeout: 60
   await page.locator(".inspector-tabs").getByRole("button", { name: "Properties" }).click();
 });
 
+test("Zinc Dark keeps source-coloured nodes readable on a matching preview canvas", { timeout: 60_000 }, async () => {
+  await page.getByRole("button", { name: "Source", exact: true }).click();
+  const sourceEditor = page.getByRole("textbox", { name: "Mermaid source" });
+  const originalSource = await sourceEditor.inputValue();
+  try {
+    await sourceEditor.fill(`flowchart LR
+  A["Bright source node"] --> B["Theme node"]
+  style A fill:#FFDE59`);
+    await page.locator(".source-panel").getByRole("button", { name: "Apply to canvas" }).click();
+    await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+    await page.locator(".view-switch button").filter({ hasText: "Beautiful" }).click();
+    await page.getByRole("button", { name: "Style", exact: true }).click();
+    await page.getByRole("combobox", { name: "Beautiful theme" }).selectOption("zinc-dark");
+    const adjustedText = page.locator('.polished-render text[data-mermade-contrast="auto"]').filter({ hasText: "Bright source node" });
+    await adjustedText.waitFor({ state: "visible" });
+
+    assert.equal(await adjustedText.evaluate((element) => getComputedStyle(element).fill), "rgb(0, 0, 0)");
+    assert.equal(await page.locator(".polished-render").evaluate((element) => getComputedStyle(element).backgroundColor), "rgb(24, 24, 27)");
+  } finally {
+    await page.getByRole("combobox", { name: "Beautiful theme" }).selectOption("mermade-auto");
+    await page.getByRole("button", { name: "Source", exact: true }).click();
+    await page.getByRole("textbox", { name: "Mermaid source" }).fill(originalSource);
+    await page.locator(".source-panel").getByRole("button", { name: "Apply to canvas" }).click();
+    await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+    await page.locator(".view-switch button").filter({ hasText: "Mermaid" }).click();
+  }
+});
+
 test("Unicode export downloads UTF-8 text without blocking on large flowcharts", { timeout: 60_000 }, async () => {
   await page.getByRole("button", { name: "Source", exact: true }).click();
   const sourceEditor = page.getByRole("textbox", { name: "Mermaid source" });

@@ -11,6 +11,33 @@ export function normalizeRenderedSvg(svg: SVGSVGElement, diagramTypeId: string, 
         edge.style.strokeWidth = "1.5px";
       }
     });
+
+    svg.querySelectorAll<SVGGeometryElement>(
+      ".node > rect, .node > circle, .node > ellipse, .node > polygon, .node > path, "
+      + ".node > .label-container rect, .node > .label-container circle, .node > .label-container ellipse, "
+      + ".node > .label-container polygon, .node > .label-container path",
+    ).forEach((shape) => shape.setAttribute("vector-effect", "non-scaling-stroke"));
+
+    // Compound Mermaid 11 shapes can contain several narrow paths. Give every
+    // rendered node a stable rectangular hit area so it remains selectable at
+    // the very small zoom levels used by large ELK diagrams.
+    svg.querySelectorAll<SVGGElement>(".node").forEach((node) => {
+      if (node.querySelector(":scope > .mermade-node-hit")) return;
+      try {
+        const bounds = node.getBBox();
+        if (bounds.width <= 0 || bounds.height <= 0) return;
+        const hit = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+        hit.classList.add("mermade-node-hit");
+        hit.setAttribute("x", String(bounds.x));
+        hit.setAttribute("y", String(bounds.y));
+        hit.setAttribute("width", String(bounds.width));
+        hit.setAttribute("height", String(bounds.height));
+        hit.setAttribute("vector-effect", "non-scaling-stroke");
+        node.insertBefore(hit, node.firstChild);
+      } catch {
+        // Detached export SVGs may not expose getBBox; the visible renderer does.
+      }
+    });
   }
 
   // Mermaid's experimental C4 renderer offsets a direct-child title by four

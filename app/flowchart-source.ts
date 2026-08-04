@@ -118,7 +118,9 @@ type FlowchartRemoval = {
   subgraphIds?: Iterable<string>;
 };
 
-const RELATIONSHIP_CONNECTOR = /\s+(--\s*"[^"]*"\s*-->|(?:---|-->)\|"?[^|]*"?\||-\.->|-\.-|==>|===|-->|---)\s+/g;
+// Mermaid permits compact relationships (`A-->B`) as well as spaced ones.
+// Do not make source patching depend on the whitespace used by the author.
+const RELATIONSHIP_CONNECTOR = /(--\s*"[^"]*"\s*-->|(?:---|-->)\|"?[^|]*"?\||-\.->|-\.-|==>|===|-->|---)/g;
 
 function expressionId(expression: string) {
   return expression.trim().match(/^([A-Za-z_][\w-]*)/)?.[1];
@@ -150,6 +152,34 @@ function relationshipLine(line: string) {
     }
   });
   return { indentation: line.match(/^\s*/)?.[0] || "", operands, edges };
+}
+
+/**
+ * Return every node identity represented by a flowchart source document.
+ * This deliberately includes nodes referenced only by relationships: Mermaid
+ * renders those nodes even when they have no separate declaration.
+ */
+export function flowchartNodeIds(source: string) {
+  const ids = new Set<string>();
+  for (const line of source.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("%%") || trimmed === "---"
+      || /^(?:flowchart|graph|subgraph|end|direction|style|classDef|class|click)\b/.test(trimmed)
+      || /^(?:config|themeVariables|theme|look|layout|fontFamily|primaryColor|primaryTextColor|lineColor|background|clusterBkg|clusterBorder):/.test(trimmed)) continue;
+
+    const relationship = relationshipLine(line);
+    if (relationship) {
+      relationship.edges.forEach((edge) => {
+        ids.add(edge.from);
+        ids.add(edge.to);
+      });
+      continue;
+    }
+
+    const id = expressionId(trimmed);
+    if (id && new RegExp(`^${escapePattern(id)}(?:\\s*$|\\s*@\\{|\\s*[\\[({>])`).test(trimmed)) ids.add(id);
+  }
+  return ids;
 }
 
 function edgeKey(from: string, to: string) {
@@ -241,7 +271,37 @@ export function removeFlowchartItems(source: string, removal: FlowchartRemoval) 
     output.push(line);
   }
 
-  return output.join("\n");
+  // Removing the last node from a subgraph otherwise leaves `subgraph … end`,
+  // which Mermaid rejects and causes an apparently undeletable orphan. Remove
+  // only the empty frame; retain any comments that were inside it.
+  const discardedFrames = new Set<number>();
+  const frames: Array<{ start: number; meaningful: boolean; directionLines: number[] }> = [];
+  output.forEach((line, index) => {
+    if (/^\s*subgraph\b/.test(line)) {
+      frames.push({ start: index, meaningful: false, directionLines: [] });
+      return;
+    }
+    if (/^\s*end\s*$/.test(line) && frames.length) {
+      const frame = frames.pop() as { start: number; meaningful: boolean; directionLines: number[] };
+      if (frame.meaningful) {
+        if (frames.length) frames[frames.length - 1].meaningful = true;
+      } else {
+        discardedFrames.add(frame.start);
+        discardedFrames.add(index);
+        frame.directionLines.forEach((directionIndex) => discardedFrames.add(directionIndex));
+      }
+      return;
+    }
+    if (frames.length && /^\s*direction\b/.test(line)) {
+      frames[frames.length - 1].directionLines.push(index);
+      return;
+    }
+    if (frames.length && line.trim() && !line.trimStart().startsWith("%%")) {
+      frames[frames.length - 1].meaningful = true;
+    }
+  });
+
+  return output.filter((_, index) => !discardedFrames.has(index)).join("\n");
 }
 
 export function appendFlowchartSubgraph(source: string, id: string, label: string, nodeIds: string[]) {

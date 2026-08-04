@@ -23,7 +23,7 @@ test("advertises only diagram types supported by Beautiful Mermaid", async () =>
 });
 
 test("uses Beautiful Mermaid's native derived palette contract by default", async () => {
-  const { DEFAULT_POLISHED_STYLE, normalisePolishedStyle, themeForPolishedRenderer } = await loadAdapter();
+  const { DEFAULT_POLISHED_STYLE, normalisePolishedStyle, readablePolishedTextColour, themeForPolishedRenderer } = await loadAdapter();
   assert.equal(DEFAULT_POLISHED_STYLE.font, "Inter");
   assert.equal(DEFAULT_POLISHED_STYLE.respectSourceStyles, true);
   assert.equal(DEFAULT_POLISHED_STYLE.styleModel, 2);
@@ -50,6 +50,9 @@ test("uses Beautiful Mermaid's native derived palette contract by default", asyn
 
   const explicitThemeOnly = normalisePolishedStyle({ ...migrated, respectSourceStyles: false });
   assert.equal(explicitThemeOnly.respectSourceStyles, false);
+  assert.equal(readablePolishedTextColour("#FFDE59"), "#000000");
+  assert.equal(readablePolishedTextColour("rgb(24, 24, 27)"), "#ffffff");
+  assert.equal(readablePolishedTextColour("var(--_node-fill)"), null);
 });
 
 test("adapts frontmatter and expanded flowchart nodes without changing canonical source", async () => {
