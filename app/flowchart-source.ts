@@ -186,6 +186,79 @@ function edgeKey(from: string, to: string) {
   return `${from}\u0000${to}`;
 }
 
+function removeEmptySubgraphFrames(output: string[]) {
+  const discardedFrames = new Set<number>();
+  const frames: Array<{ start: number; meaningful: boolean; directionLines: number[] }> = [];
+  output.forEach((line, index) => {
+    if (/^\s*subgraph\b/.test(line)) {
+      frames.push({ start: index, meaningful: false, directionLines: [] });
+      return;
+    }
+    if (/^\s*end\s*$/.test(line) && frames.length) {
+      const frame = frames.pop() as { start: number; meaningful: boolean; directionLines: number[] };
+      if (frame.meaningful) {
+        if (frames.length) frames[frames.length - 1].meaningful = true;
+      } else {
+        discardedFrames.add(frame.start);
+        discardedFrames.add(index);
+        frame.directionLines.forEach((directionIndex) => discardedFrames.add(directionIndex));
+      }
+      return;
+    }
+    if (frames.length && /^\s*direction\b/.test(line)) {
+      frames[frames.length - 1].directionLines.push(index);
+      return;
+    }
+    if (frames.length && line.trim() && !line.trimStart().startsWith("%%")) {
+      frames[frames.length - 1].meaningful = true;
+    }
+  });
+  return output.filter((_, index) => !discardedFrames.has(index));
+}
+
+/**
+ * Move a node declaration into an existing subgraph, or back to the root when
+ * targetSubgraphId is omitted. Standalone declarations are relocated intact so
+ * labels, expanded shapes, and source-owned styling remain authoritative.
+ */
+export function moveFlowchartNodeToSubgraph(source: string, nodeId: string, targetSubgraphId?: string) {
+  const escapedNodeId = escapePattern(nodeId);
+  const declarationPattern = new RegExp(`^\\s*${escapedNodeId}(?:\\s*$|\\s*@\\{|\\s*[\\[({>])`);
+  const declarations: string[] = [];
+  const retained = source.split(/\r?\n/).filter((line) => {
+    if (relationshipLine(line) || !declarationPattern.test(line)) return true;
+    declarations.push(line.trim());
+    return false;
+  });
+  const nodeStatements = declarations.length ? declarations : [nodeId];
+
+  if (!targetSubgraphId) {
+    const rooted = [...retained, ...nodeStatements.map((statement) => `  ${statement}`)];
+    return removeEmptySubgraphFrames(rooted).join("\n");
+  }
+
+  const subgraphStack: Array<{ id: string; indentation: string }> = [];
+  let targetEnd = -1;
+  let targetIndentation = "  ";
+  retained.forEach((line, index) => {
+    const subgraph = line.match(/^(\s*)subgraph\s+([A-Za-z_][\w-]*)\b/);
+    if (subgraph) {
+      subgraphStack.push({ id: subgraph[2], indentation: subgraph[1] });
+      return;
+    }
+    if (!/^\s*end\s*$/.test(line) || !subgraphStack.length) return;
+    const closed = subgraphStack.pop();
+    if (closed?.id === targetSubgraphId) {
+      targetEnd = index;
+      targetIndentation = `${closed.indentation}  `;
+    }
+  });
+  if (targetEnd < 0) return null;
+
+  retained.splice(targetEnd, 0, ...nodeStatements.map((statement) => `${targetIndentation}${statement}`));
+  return removeEmptySubgraphFrames(retained).join("\n");
+}
+
 /**
  * Remove visual flowchart selections by patching only their Mermaid statements.
  * Relationship chains are expanded when necessary so unrelated nodes and edges,
@@ -274,34 +347,7 @@ export function removeFlowchartItems(source: string, removal: FlowchartRemoval) 
   // Removing the last node from a subgraph otherwise leaves `subgraph … end`,
   // which Mermaid rejects and causes an apparently undeletable orphan. Remove
   // only the empty frame; retain any comments that were inside it.
-  const discardedFrames = new Set<number>();
-  const frames: Array<{ start: number; meaningful: boolean; directionLines: number[] }> = [];
-  output.forEach((line, index) => {
-    if (/^\s*subgraph\b/.test(line)) {
-      frames.push({ start: index, meaningful: false, directionLines: [] });
-      return;
-    }
-    if (/^\s*end\s*$/.test(line) && frames.length) {
-      const frame = frames.pop() as { start: number; meaningful: boolean; directionLines: number[] };
-      if (frame.meaningful) {
-        if (frames.length) frames[frames.length - 1].meaningful = true;
-      } else {
-        discardedFrames.add(frame.start);
-        discardedFrames.add(index);
-        frame.directionLines.forEach((directionIndex) => discardedFrames.add(directionIndex));
-      }
-      return;
-    }
-    if (frames.length && /^\s*direction\b/.test(line)) {
-      frames[frames.length - 1].directionLines.push(index);
-      return;
-    }
-    if (frames.length && line.trim() && !line.trimStart().startsWith("%%")) {
-      frames[frames.length - 1].meaningful = true;
-    }
-  });
-
-  return output.filter((_, index) => !discardedFrames.has(index)).join("\n");
+  return removeEmptySubgraphFrames(output).join("\n");
 }
 
 export function appendFlowchartSubgraph(source: string, id: string, label: string, nodeIds: string[]) {

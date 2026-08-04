@@ -300,7 +300,10 @@ test("loads Beautiful Mermaid as a distinct presentation workspace without repla
 });
 
 test("does not disable spatial flowchart editing merely because advanced source is preserved", async () => {
-  const editor = await readFile(new URL("../app/mermaid-editor.tsx", import.meta.url), "utf8");
+  const [editor, sourceHelpers] = await Promise.all([
+    readFile(new URL("../app/mermaid-editor.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/flowchart-source.ts", import.meta.url), "utf8"),
+  ]);
 
   assert.match(editor, /const nativeFlowchart = activeDiagramType\.id === "flowchart" && diagram\.nodes\.length > 0/);
   assert.doesNotMatch(editor, /function parseMermaid[\s\S]{0,180}if \(!canUseNativeFlowchartEditor\(source\)\) return null/);
@@ -309,6 +312,9 @@ test("does not disable spatial flowchart editing merely because advanced source 
   assert.match(editor, /appendFlowchartStatements\(current\.source/);
   assert.match(editor, /removeFlowchartItems\(candidate, \{ nodeIds, edges: selectedEdges, subgraphIds \}\)/);
   assert.match(editor, /updateFlowchartSubgraphStatement\(current\.source, id, label\)/);
+  assert.match(editor, /aria-label="Subgraph"[\s\S]*?assignNodeToSubgraph\(selectedNode\.id, event\.target\.value\)/);
+  assert.match(editor, /moveFlowchartNodeToSubgraph\(candidate, nodeId, targetId\)/);
+  assert.match(sourceHelpers, /export function moveFlowchartNodeToSubgraph/);
   assert.match(editor, /\(\?:-->\|---\)\\\|/);
   assert.match(editor, /toExpression\.split\(\/\\s\+&\\s\+\/\)/);
   assert.doesNotMatch(editor, /toExpression\.split\(\/\\s\*&\\s\*\/\)/);

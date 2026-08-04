@@ -52,7 +52,7 @@ import {
 import { SemanticVisualEditor } from "./semantic-visual-editor";
 import { accessiblePolishedTextColour, DEFAULT_POLISHED_STYLE, normalisePolishedStyle, polishedTextRoles, POLISHED_THEME_OPTIONS, POLISHED_THEME_PREVIEWS, PolishedCustomColours, PolishedStyle, supportsPolishedDiagram } from "./beautiful-mermaid-config";
 import { layoutFlowchart } from "./flowchart-layout";
-import { appendFlowchartStatements, appendFlowchartSubgraph, canUseNativeFlowchartEditor, flowchartNodeIds, removeFlowchartItems, updateFlowchartDirection, updateFlowchartEdgeStatement, updateFlowchartNodeStatement, updateFlowchartSubgraphStatement } from "./flowchart-source";
+import { appendFlowchartStatements, appendFlowchartSubgraph, canUseNativeFlowchartEditor, flowchartNodeIds, moveFlowchartNodeToSubgraph, removeFlowchartItems, updateFlowchartDirection, updateFlowchartEdgeStatement, updateFlowchartNodeStatement, updateFlowchartSubgraphStatement } from "./flowchart-source";
 import { layoutCompatibilityError } from "./layout-compatibility";
 import {
   createLocalDiagramId,
@@ -1678,6 +1678,37 @@ export function MermaidEditor() {
     if (save) commit(apply); else setDiagram(apply);
   };
 
+  const assignNodeToSubgraph = async (nodeId: string, targetSubgraphId: string) => {
+    const targetId = targetSubgraphId || undefined;
+    const node = diagram.nodes.find((candidate) => candidate.id === nodeId);
+    const target = targetId ? diagram.groups.find((group) => group.id === targetId) : undefined;
+    if (!node || (targetId && !target)) return;
+
+    let candidate = diagram.source;
+    if (candidate !== undefined) {
+      const moved = moveFlowchartNodeToSubgraph(candidate, nodeId, targetId);
+      if (moved === null) {
+        notify("That subgraph could not be found in the Mermaid source");
+        return;
+      }
+      const error = await validateSource(moved, activeMermaidVersion);
+      if (error) {
+        notify(`Mermaid could not safely change that subgraph: ${error}`);
+        return;
+      }
+      candidate = moved;
+    }
+
+    commit((current) => ({
+      ...current,
+      nodes: current.nodes.map((currentNode) => currentNode.id === nodeId
+        ? { ...currentNode, groupId: targetId }
+        : currentNode),
+      source: candidate,
+    }));
+    notify(target ? `Added ${node.label} to ${target.label}` : `Removed ${node.label} from its subgraph`);
+  };
+
   const addNode = (shape: NodeShape = "rectangle", connectFromSelection = false, connectedShortcut = "Shift+N") => {
     const origin = connectFromSelection && selected.length === 1
       ? diagram.nodes.find((node) => node.id === selected[0])
@@ -3141,7 +3172,10 @@ export function MermaidEditor() {
                         {group.options.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
                       </optgroup>)}
                     </select></label>
-                    <div className="property-row"><span>Subgraph</span><b>{diagram.groups.find((group) => group.id === selectedNode.groupId)?.label || "None"}</b></div>
+                    <label><span>Subgraph</span><select aria-label="Subgraph" value={selectedNode.groupId || ""} onChange={(event) => void assignNodeToSubgraph(selectedNode.id, event.target.value)}>
+                      <option value="">None</option>
+                      {diagram.groups.map((group) => <option key={group.id} value={group.id}>{group.label}</option>)}
+                    </select></label>
                     <button className="wide-action" type="button" onClick={() => { setTool("connect"); setConnectionStart(selectedNode.id); notify("Choose a destination node"); }}><Link2 size={16} /> Add relationship from this node</button>
                   </div>
                 ) : (

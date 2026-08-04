@@ -161,6 +161,46 @@ test("renames and unwraps source-backed subgraphs without deleting their nodes",
   assert.match(unwrapped, /A --> B/);
 });
 
+test("moves a source-backed node between existing subgraphs without flattening its syntax", async () => {
+  const { moveFlowchartNodeToSubgraph } = await loadFlowchartSourceHelpers();
+  const source = `flowchart TB
+  subgraph intake["Intake"]
+    A@{ shape: stadium, label: "Start" }
+  end
+  subgraph review["Review"]
+    B[Check]
+  end
+  A --> B
+  style A fill:#ffffff,stroke:#77737f,color:#24232a,stroke-width:1.5px`;
+
+  const moved = moveFlowchartNodeToSubgraph(source, "A", "review");
+
+  assert.doesNotMatch(moved, /subgraph intake/);
+  assert.match(moved, /subgraph review\["Review"\][\s\S]*B\[Check\][\s\S]*A@\{ shape: stadium, label: "Start" \}[\s\S]*end/);
+  assert.match(moved, /A --> B/);
+  assert.match(moved, /style A fill:#ffffff/);
+});
+
+test("moves a node out of its subgraph while preserving its declaration", async () => {
+  const { moveFlowchartNodeToSubgraph } = await loadFlowchartSourceHelpers();
+  const source = `flowchart LR
+  subgraph review["Review"]
+    A{"Approved?"}
+  end
+  A --> B[Done]`;
+
+  const moved = moveFlowchartNodeToSubgraph(source, "A");
+
+  assert.doesNotMatch(moved, /subgraph review|^\s*end\s*$/m);
+  assert.match(moved, /A --> B\[Done\]/);
+  assert.match(moved, /^\s*A\{"Approved\?"\}$/m);
+});
+
+test("refuses a missing subgraph rather than desynchronising source and canvas", async () => {
+  const { moveFlowchartNodeToSubgraph } = await loadFlowchartSourceHelpers();
+  assert.equal(moveFlowchartNodeToSubgraph("flowchart LR\n  A --> B", "A", "missing"), null);
+});
+
 test("finds source-backed nodes in compact relationships and expanded shapes", async () => {
   const { flowchartNodeIds } = await loadFlowchartSourceHelpers();
   const source = `flowchart TB

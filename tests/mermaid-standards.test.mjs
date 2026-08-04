@@ -307,6 +307,31 @@ test("local diagram switcher creates, searches, switches, duplicates and deletes
   assert.equal(await nameInput.inputValue(), originalName);
 });
 
+test("a selected node can move into and out of an existing subgraph", { timeout: 60_000 }, async () => {
+  await page.keyboard.press("Escape");
+  await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "Editor", exact: true }).click();
+  await page.locator(".view-switch button").filter({ hasText: "Mermaid" }).click();
+  await page.locator('.mermaid-render [data-node-id="approved"]').first().click();
+
+  const subgraph = page.getByRole("combobox", { name: "Subgraph" });
+  assert.deepEqual(await subgraph.locator("option").allTextContents(), ["None", "Checkout", "Fulfilment"]);
+  await subgraph.selectOption("checkout");
+  assert.equal(await subgraph.inputValue(), "checkout");
+
+  await page.getByRole("button", { name: "Source", exact: true }).click();
+  const groupedSource = await page.getByRole("textbox", { name: "Mermaid source" }).inputValue();
+  assert.match(groupedSource, /subgraph checkout\["Checkout"\][\s\S]*approved\{"Approved\?"\}[\s\S]*end/);
+  await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+
+  await subgraph.selectOption("");
+  assert.equal(await subgraph.inputValue(), "");
+  await page.getByRole("button", { name: "Source", exact: true }).click();
+  const ungroupedSource = await page.getByRole("textbox", { name: "Mermaid source" }).inputValue();
+  assert.doesNotMatch(ungroupedSource.match(/subgraph checkout[\s\S]*?\n\s*end/)?.[0] || "", /approved\{"Approved\?"\}/);
+  assert.match(ungroupedSource, /^\s*approved\{"Approved\?"\}$/m);
+  await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+});
+
 test("every registered diagram supports its intended canvas modes", { timeout: 300_000 }, async (t) => {
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "Source", exact: true }).click();
