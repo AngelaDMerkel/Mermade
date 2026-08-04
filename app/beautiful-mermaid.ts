@@ -1,92 +1,17 @@
-export const POLISHED_DIAGRAM_TYPE_IDS = new Set(["flowchart", "state", "sequence", "class", "er", "xychart"]);
+import { BeautifulTextRoles, polishedTextRoles, PolishedStyle, themeForPolishedRenderer } from "./beautiful-mermaid-config";
 
-export const POLISHED_THEME_OPTIONS = [
-  ["mermade-auto", "Mermade — adapts to app"],
-  ["zinc-light", "Zinc Light"],
-  ["zinc-dark", "Zinc Dark"],
-  ["tokyo-night", "Tokyo Night"],
-  ["tokyo-night-storm", "Tokyo Night Storm"],
-  ["tokyo-night-light", "Tokyo Night Light"],
-  ["catppuccin-mocha", "Catppuccin Mocha"],
-  ["catppuccin-latte", "Catppuccin Latte"],
-  ["nord", "Nord"],
-  ["nord-light", "Nord Light"],
-  ["dracula", "Dracula"],
-  ["github-light", "GitHub Light"],
-  ["github-dark", "GitHub Dark"],
-  ["solarized-light", "Solarized Light"],
-  ["solarized-dark", "Solarized Dark"],
-  ["one-dark", "One Dark"],
-] as const;
-
-export type PolishedTheme = typeof POLISHED_THEME_OPTIONS[number][0];
-
-export type PolishedStyle = {
-  styleModel: 2;
-  theme: PolishedTheme;
-  font: string;
-  padding: number;
-  nodeSpacing: number;
-  layerSpacing: number;
-  componentSpacing: number;
-  transparent: boolean;
-  respectSourceStyles: boolean;
-  interactive: boolean;
-};
-
-export const DEFAULT_POLISHED_STYLE: PolishedStyle = {
-  styleModel: 2,
-  theme: "mermade-auto",
-  font: "Inter",
-  padding: 40,
-  nodeSpacing: 28,
-  layerSpacing: 48,
-  componentSpacing: 36,
-  transparent: true,
-  respectSourceStyles: true,
-  interactive: true,
-};
-
-const MERMADE_ADAPTIVE_THEME = {
-  bg: "var(--mermade-polished-bg, #fffdfa)",
-  fg: "var(--mermade-polished-fg, #27232a)",
-} as const;
-
-type BeautifulThemeColours = {
-  bg: string;
-  fg: string;
-  line?: string;
-  accent?: string;
-  muted?: string;
-  surface?: string;
-  border?: string;
-};
-
-const LEGACY_DEFAULT_FONT = "Inter, ui-sans-serif, system-ui, sans-serif";
-
-/**
- * Version one of Mermade's Beautiful settings overrode Beautiful Mermaid's
- * native palette and suppressed supported source directives by default.
- * Migrate that stored shape once; subsequent explicit choices are retained.
- */
-export function normalisePolishedStyle(style?: Partial<PolishedStyle> & { styleModel?: number }): PolishedStyle {
-  const legacy = Boolean(style && style.styleModel !== 2);
-  return {
-    ...DEFAULT_POLISHED_STYLE,
-    ...style,
-    styleModel: 2,
-    font: !style?.font || style.font === LEGACY_DEFAULT_FONT ? DEFAULT_POLISHED_STYLE.font : style.font,
-    respectSourceStyles: legacy ? true : (style?.respectSourceStyles ?? DEFAULT_POLISHED_STYLE.respectSourceStyles),
-  };
-}
-
-export function themeForPolishedRenderer(theme: PolishedTheme, themes: Record<string, BeautifulThemeColours>): BeautifulThemeColours {
-  return theme === "mermade-auto" ? MERMADE_ADAPTIVE_THEME : (themes[theme] || MERMADE_ADAPTIVE_THEME);
-}
-
-export function supportsPolishedDiagram(diagramTypeId: string) {
-  return POLISHED_DIAGRAM_TYPE_IDS.has(diagramTypeId);
-}
+export {
+  DEFAULT_POLISHED_STYLE,
+  accessiblePolishedTextColour,
+  normalisePolishedStyle,
+  polishedTextRoles,
+  POLISHED_DIAGRAM_TYPE_IDS,
+  POLISHED_THEME_OPTIONS,
+  POLISHED_THEME_PREVIEWS,
+  supportsPolishedDiagram,
+  themeForPolishedRenderer,
+} from "./beautiful-mermaid-config";
+export type { BeautifulThemeColours, PolishedCustomColours, PolishedPaletteMode, PolishedStyle, PolishedTheme } from "./beautiful-mermaid-config";
 
 function withoutFrontmatter(source: string) {
   const trimmed = source.trimStart();
@@ -154,13 +79,13 @@ function withoutFlowchartPresentationDirectives(source: string) {
  * smaller shape vocabulary. Adapt a render-only copy without changing the
  * canonical source stored by Mermade.
  */
-export function sourceForPolishedRenderer(source: string, respectSourceStyles = true) {
+export function sourceForPolishedRenderer(source: string, respectSourceStyles = false) {
   const withoutYaml = withoutFrontmatter(source).replace(/^(\s*)flowchart-elk\b/im, "$1flowchart");
   const adapted = supplyBeautifulFlowchartDirection(adaptExpandedFlowchartNodes(withoutYaml));
   return respectSourceStyles ? adapted : withoutFlowchartPresentationDirectives(adapted);
 }
 
-function sanitiseSvgMarkup(markup: string) {
+function sanitiseSvgMarkup(markup: string, textRoles: BeautifulTextRoles) {
   const document = new DOMParser().parseFromString(markup, "image/svg+xml");
   const svg = document.documentElement;
   if (svg.tagName.toLowerCase() !== "svg" || document.querySelector("parsererror")) {
@@ -175,6 +100,16 @@ function sanitiseSvgMarkup(markup: string) {
         element.removeAttribute(attribute.name);
       }
     }
+  });
+  // Retain Beautiful Mermaid's primary, secondary, muted, and faint hierarchy,
+  // but use contrast-checked values for text. Graphical marks continue to use
+  // the palette's original line and muted colours.
+  svg.querySelectorAll("style").forEach((style) => {
+    style.textContent = (style.textContent || "")
+      .replace(/--_text:\s*[^;]+;/g, `--_text: ${textRoles.primary};`)
+      .replace(/--_text-sec:\s*[^;]+;/g, `--_text-sec: ${textRoles.secondary};`)
+      .replace(/--_text-muted:\s*[^;]+;/g, `--_text-muted: ${textRoles.muted};`)
+      .replace(/--_text-faint:\s*[^;]+;/g, `--_text-faint: ${textRoles.faint};`);
   });
   svg.querySelectorAll<SVGElement>(".node").forEach((node) => {
     const shape = node.querySelector<SVGElement>(":scope > rect, :scope > polygon, :scope > path, :scope > circle, :scope > ellipse");
@@ -218,7 +153,9 @@ export function readablePolishedTextColour(fill: string) {
 
 export async function renderPolishedSvg(source: string, style: PolishedStyle) {
   const { renderMermaidSVG, THEMES } = await import("beautiful-mermaid");
-  const theme = themeForPolishedRenderer(style.theme, THEMES);
+  const selectedTheme = style.paletteMode === "custom" ? style.customColours : themeForPolishedRenderer(style.theme, THEMES);
+  const textRoles = polishedTextRoles(selectedTheme);
+  const theme = { ...selectedTheme, fg: textRoles.primary };
   return sanitiseSvgMarkup(renderMermaidSVG(sourceForPolishedRenderer(source, style.respectSourceStyles), {
     ...theme,
     font: style.font,
@@ -228,10 +165,10 @@ export async function renderPolishedSvg(source: string, style: PolishedStyle) {
     componentSpacing: style.componentSpacing,
     transparent: style.transparent,
     interactive: style.interactive,
-  }));
+  }), textRoles);
 }
 
-export async function renderPolishedAscii(source: string) {
+export async function renderPolishedAscii(source: string, useAscii = true) {
   const { renderMermaidASCII } = await import("beautiful-mermaid");
-  return renderMermaidASCII(sourceForPolishedRenderer(source), { colorMode: "none" });
+  return renderMermaidASCII(sourceForPolishedRenderer(source), { colorMode: "none", useAscii });
 }

@@ -13,6 +13,12 @@ let appServer;
 let shapes;
 let types;
 
+async function applyValidSourceAndWait() {
+  const apply = page.getByRole("button", { name: "Apply to canvas" });
+  await apply.click();
+  await page.waitForFunction(() => document.querySelector(".source-panel .primary-button")?.hasAttribute("disabled"));
+}
+
 before(async () => {
   server = await createServer({
     configFile: false,
@@ -249,21 +255,72 @@ test("double-clicking an unselected Mermaid flowchart node opens text editing", 
   assert.equal(await editor.inputValue(), "Cart");
 });
 
+test("local diagram switcher creates, searches, switches, duplicates and deletes isolated charts", { timeout: 60_000 }, async () => {
+  await page.keyboard.press("Escape");
+  const nameInput = page.getByRole("textbox", { name: "Diagram name" });
+  const originalName = await nameInput.inputValue();
+  const waitForSaved = () => page.waitForFunction(() => document.querySelector(".save-status")?.textContent?.includes("Saved locally"));
+  const openLibrary = async () => {
+    await page.locator(".save-status").click();
+    await page.getByRole("dialog", { name: "Local diagrams" }).waitFor({ state: "visible" });
+  };
+
+  await openLibrary();
+  await page.getByRole("dialog", { name: "Local diagrams" }).getByRole("button", { name: "New" }).click();
+  await nameInput.fill("Library test diagram");
+  await waitForSaved();
+
+  await openLibrary();
+  await page.getByRole("dialog", { name: "Local diagrams" }).getByRole("button", { name: "Duplicate" }).click();
+  await waitForSaved();
+  assert.equal(await nameInput.inputValue(), "Library test diagram copy");
+
+  await openLibrary();
+  const library = page.getByRole("dialog", { name: "Local diagrams" });
+  await library.getByRole("searchbox", { name: "Search local diagrams" }).fill(originalName);
+  assert.equal(await library.getByRole("option", { name: new RegExp(`^${originalName}`) }).count(), 1);
+  assert.equal(await library.getByRole("option", { name: /^Library test diagram/ }).count(), 0);
+  await library.getByRole("option", { name: new RegExp(`^${originalName}`) }).click();
+  assert.equal(await nameInput.inputValue(), originalName);
+
+  await page.keyboard.press("Control+z");
+  assert.equal(await nameInput.inputValue(), originalName, "undo must not cross a local diagram boundary");
+
+  await openLibrary();
+  await page.getByRole("dialog", { name: "Local diagrams" }).getByRole("option", { name: /^Library test diagram copy/ }).click();
+  await openLibrary();
+  await page.getByRole("dialog", { name: "Local diagrams" }).getByRole("button", { name: "Delete" }).click();
+  await page.getByRole("alertdialog", { name: "Delete local diagram" }).getByRole("button", { name: "Delete" }).click();
+
+  if (await nameInput.inputValue() !== "Library test diagram") {
+    await openLibrary();
+    await page.getByRole("dialog", { name: "Local diagrams" }).getByRole("option", { name: /^Library test diagram Edited/ }).click();
+  }
+  await openLibrary();
+  await page.getByRole("dialog", { name: "Local diagrams" }).getByRole("button", { name: "Delete" }).click();
+  await page.getByRole("alertdialog", { name: "Delete local diagram" }).getByRole("button", { name: "Delete" }).click();
+
+  if (await nameInput.inputValue() !== originalName) {
+    await openLibrary();
+    await page.getByRole("dialog", { name: "Local diagrams" }).getByRole("option", { name: new RegExp(`^${originalName}`) }).click();
+  }
+  assert.equal(await nameInput.inputValue(), originalName);
+});
+
 test("every registered diagram supports its intended canvas modes", { timeout: 300_000 }, async (t) => {
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "Source", exact: true }).click();
   const originalSource = await page.getByRole("textbox", { name: "Mermaid source" }).inputValue();
   await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
 
-  const polishedTypes = new Set(["flowchart", "state", "sequence", "class", "er", "xychart"]);
+  const beautifulTypes = new Set(["flowchart", "state", "sequence", "class", "er", "xychart"]);
   const modeNames = { freeform: "FreeForm", structured: "Structured", data: "Data" };
-
   try {
     for (const type of types) {
       await t.test(type.label, async () => {
         await page.getByRole("button", { name: "Source", exact: true }).click();
         await page.getByRole("textbox", { name: "Mermaid source" }).fill(type.template);
-        await page.getByRole("button", { name: "Apply to canvas" }).click();
+        await applyValidSourceAndWait();
         await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
 
         const mermaidButton = page.locator(".view-switch button").filter({ hasText: "Mermaid" });
@@ -290,23 +347,26 @@ test("every registered diagram supports its intended canvas modes", { timeout: 3
           assert.equal(await page.locator(".semantic-error").count(), 0, `${type.label} visual edit must remain valid Mermaid`);
         }
 
-        const polishedButton = page.locator(".view-switch button").filter({ hasText: "Beautiful" });
-        assert.equal(await polishedButton.isEnabled(), polishedTypes.has(type.id), `${type.label} Beautiful availability must match Beautiful Mermaid`);
-        if (polishedTypes.has(type.id)) {
-          await polishedButton.click();
-          const polishedCanvas = page.locator(".polished-render");
-          await polishedCanvas.locator(":scope > svg").waitFor({ state: "visible" });
-          assert.equal(await page.locator(".mermaid-render-error").count(), 0, `${type.label} Beautiful canvas must render`);
+        const beautifulWorkspaceButton = page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "Beautiful", exact: true });
+        assert.equal(await beautifulWorkspaceButton.isEnabled(), beautifulTypes.has(type.id), `${type.label} Beautiful availability must match Beautiful Mermaid`);
+        if (beautifulTypes.has(type.id)) {
+          await beautifulWorkspaceButton.click();
+          const beautifulPreview = page.locator(".polished-render");
+          await beautifulPreview.locator(':scope > svg[data-renderer="beautiful-mermaid"]').waitFor({ state: "visible" });
+          assert.equal(await page.locator(".mermaid-render-error").count(), 0, `${type.label} Beautiful workspace must render`);
+          assert.equal(await page.locator(".beautiful-inspector").count(), 1, `${type.label} must expose presentation controls in Beautiful`);
+          assert.equal(await page.getByRole("button", { name: "Add node (N)" }).count(), 0, "Beautiful must not expose structural canvas tools");
           await page.getByRole("button", { name: "Source", exact: true }).click();
-          assert.ok((await page.getByRole("textbox", { name: "Mermaid source" }).inputValue()).includes(declaration), `${type.label} Beautiful canvas must retain editable canonical source`);
+          assert.ok((await page.getByRole("textbox", { name: "Mermaid source" }).inputValue()).includes(declaration), `${type.label} Beautiful workspace must retain editable canonical source`);
           await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+          await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "Editor", exact: true }).click();
         }
       });
     }
   } finally {
     await page.getByRole("button", { name: "Source", exact: true }).click();
     await page.getByRole("textbox", { name: "Mermaid source" }).fill(originalSource);
-    await page.getByRole("button", { name: "Apply to canvas" }).click();
+    await applyValidSourceAndWait();
     await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
     await page.locator(".view-switch button").filter({ hasText: "Mermaid" }).click();
     await page.locator(".mermaid-render:not(.polished-render) svg").waitFor({ state: "visible" });
@@ -418,27 +478,25 @@ test("view switching preserves the selected node's viewport position", async () 
   }, { selector: freeSelector, before });
 });
 
-test("Beautiful view lazy-renders a selectable, styled flowchart", { timeout: 60_000 }, async () => {
-  await page.locator(".view-switch button").filter({ hasText: "Beautiful" }).click();
-  await page.locator(".polished-render svg").waitFor({ state: "visible" });
+test("Beautiful workspace lazy-renders a styled, source-safe flowchart", { timeout: 60_000 }, async () => {
+  await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "Beautiful", exact: true }).click();
+  await page.locator('.polished-render svg[data-renderer="beautiful-mermaid"]').waitFor({ state: "visible" });
 
   assert.equal(await page.locator(".mermaid-render-error").count(), 0, "the supported starter must render without a Beautiful error");
-  const rootStyle = await page.locator(".polished-render svg").getAttribute("style");
-  assert.match(rootStyle || "", /--bg:[^;]+;--fg:/, "the adaptive theme must provide Beautiful Mermaid's two-colour contract");
-  assert.doesNotMatch(rootStyle || "", /--(?:line|accent|muted|surface|border):/, "the adaptive theme must leave Beautiful Mermaid's derived palette intact");
   assert.match(await page.locator(".polished-render svg style").textContent(), /font-family: 'Inter'/, "the Beautiful font must be a valid family name");
-  assert.ok(await page.locator(".polished-render [data-node-id]").count() >= 7, "the complete starter flowchart must remain interactive");
-  assert.equal(await page.locator('.polished-render [data-node-id="details"] > rect').getAttribute("fill"), "#fde8f1", "supported source styles must reach the Beautiful SVG by default");
+  assert.ok(await page.locator(".polished-render [data-node-id]").count() >= 7, "the complete starter flowchart must remain intact");
+  assert.equal(await page.getByRole("checkbox", { name: "Source colour overrides" }).isChecked(), false, "the Beautiful palette must own presentation by default");
+  assert.notEqual(await page.locator('.polished-render [data-node-id="details"] > rect').getAttribute("fill"), "#fde8f1", "Mermade's generated node colours must not flatten the selected Beautiful theme");
   const node = page.locator('.polished-render [data-node-id="cart"]');
   await node.click();
-  assert.match(await node.getAttribute("class"), /selected/);
+  assert.doesNotMatch((await node.getAttribute("class")) || "", /selected/, "presentation preview clicks must not enter structural editing");
 
-  await page.getByRole("button", { name: "Style", exact: true }).click();
-  const theme = page.locator(".diagram-style-panel label").filter({ hasText: "Beautiful theme" }).locator("select");
-  await theme.selectOption("dracula");
+  await page.locator(".beautiful-theme-grid").getByRole("button", { name: "Dracula", exact: true }).click();
   await page.waitForFunction(() => Boolean(document.querySelector('.polished-render svg[style*="#282a36"]')));
   assert.equal(await page.locator(".polished-render svg").getAttribute("preserveAspectRatio"), "xMidYMid meet");
 
+  await page.locator(".beautiful-theme-grid").getByRole("button", { name: /Mermade · adapts to app/ }).click();
+  await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "Editor", exact: true }).click();
   await page.locator(".view-switch button").filter({ hasText: "Mermaid" }).click();
   await page.locator(".mermaid-render:not(.polished-render) svg").waitFor({ state: "visible" });
   await page.locator(".inspector-tabs").getByRole("button", { name: "Properties" }).click();
@@ -452,23 +510,146 @@ test("Zinc Dark keeps source-coloured nodes readable on a matching preview canva
     await sourceEditor.fill(`flowchart LR
   A["Bright source node"] --> B["Theme node"]
   style A fill:#FFDE59`);
-    await page.locator(".source-panel").getByRole("button", { name: "Apply to canvas" }).click();
+    await applyValidSourceAndWait();
     await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
-    await page.locator(".view-switch button").filter({ hasText: "Beautiful" }).click();
-    await page.getByRole("button", { name: "Style", exact: true }).click();
-    await page.getByRole("combobox", { name: "Beautiful theme" }).selectOption("zinc-dark");
+    await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "Beautiful", exact: true }).click();
+    const sourceColourOverrides = page.getByRole("checkbox", { name: "Source colour overrides" });
+    if (!(await sourceColourOverrides.isChecked())) await sourceColourOverrides.check();
+    await page.locator(".beautiful-theme-grid").getByRole("button", { name: "Zinc Dark", exact: true }).click();
+    await page.waitForFunction(() => document.querySelector(".polished-render svg")?.getAttribute("style")?.includes("--bg:#18181B"));
+    const transparentBackground = page.getByRole("checkbox", { name: "Transparent export" });
+    if (await transparentBackground.isChecked()) await transparentBackground.uncheck();
+    await page.waitForFunction(() => {
+      const surface = document.querySelector(".beautiful-surface");
+      return surface && getComputedStyle(surface).backgroundColor === "rgb(24, 24, 27)";
+    });
     const adjustedText = page.locator('.polished-render text[data-mermade-contrast="auto"]').filter({ hasText: "Bright source node" });
     await adjustedText.waitFor({ state: "visible" });
 
     assert.equal(await adjustedText.evaluate((element) => getComputedStyle(element).fill), "rgb(0, 0, 0)");
-    assert.equal(await page.locator(".polished-render").evaluate((element) => getComputedStyle(element).backgroundColor), "rgb(24, 24, 27)");
+    assert.equal(await page.locator(".beautiful-surface").evaluate((element) => getComputedStyle(element).backgroundColor), "rgb(24, 24, 27)");
+    assert.equal(await page.locator(".beautiful-inspector").evaluate((element) => getComputedStyle(element).backgroundColor), "rgb(24, 24, 27)");
+    assert.equal(await page.locator(".beautiful-tool-rail").evaluate((element) => getComputedStyle(element).backgroundColor), "rgb(24, 24, 27)");
   } finally {
-    await page.getByRole("combobox", { name: "Beautiful theme" }).selectOption("mermade-auto");
+    await page.locator(".beautiful-theme-grid").getByRole("button", { name: /Mermade · adapts to app/ }).click();
+    const transparentBackground = page.getByRole("checkbox", { name: "Transparent export" });
+    if (!(await transparentBackground.isChecked())) await transparentBackground.check();
+    const sourceColourOverrides = page.getByRole("checkbox", { name: "Source colour overrides" });
+    if (await sourceColourOverrides.isChecked()) await sourceColourOverrides.uncheck();
     await page.getByRole("button", { name: "Source", exact: true }).click();
     await page.getByRole("textbox", { name: "Mermaid source" }).fill(originalSource);
-    await page.locator(".source-panel").getByRole("button", { name: "Apply to canvas" }).click();
+    await applyValidSourceAndWait();
     await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+    await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "Editor", exact: true }).click();
     await page.locator(".view-switch button").filter({ hasText: "Mermaid" }).click();
+  }
+});
+
+test("every Beautiful theme keeps diagram text readable", { timeout: 60_000 }, async () => {
+  await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "Beautiful", exact: true }).click();
+  const themes = [
+    ["Zinc Light", "#ffffff"], ["Zinc Dark", "#18181b"], ["Tokyo Night", "#1a1b26"],
+    ["Tokyo Night Storm", "#24283b"], ["Tokyo Night Light", "#d5d6db"], ["Catppuccin Mocha", "#1e1e2e"],
+    ["Catppuccin Latte", "#eff1f5"], ["Nord", "#2e3440"], ["Nord Light", "#eceff4"], ["Dracula", "#282a36"],
+    ["GitHub Light", "#ffffff"], ["GitHub Dark", "#0d1117"], ["Solarized Light", "#fdf6e3"],
+    ["Solarized Dark", "#002b36"], ["One Dark", "#282c34"],
+  ];
+
+  try {
+    for (const [label, background] of themes) {
+      await page.locator(".beautiful-theme-grid").getByRole("button", { name: label, exact: true }).click();
+      await page.waitForFunction((expected) => document.querySelector(".polished-render svg")?.style.getPropertyValue("--bg").toLowerCase() === expected, background);
+      const contrastReport = await page.locator(".polished-render svg").evaluate((svg) => {
+        const channels = (value) => (value.match(/[\d.]+/g) || []).slice(0, 3).map(Number);
+        const luminance = (value) => {
+          const linear = channels(value).map((channel) => {
+            const normalised = channel / 255;
+            return normalised <= 0.04045 ? normalised / 12.92 : ((normalised + 0.055) / 1.055) ** 2.4;
+          });
+          return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+        };
+        const backgroundValue = getComputedStyle(svg.closest(".beautiful-surface")).backgroundColor;
+        const backgroundLuminance = luminance(backgroundValue);
+        const entries = [...svg.querySelectorAll("text")].map((text) => {
+          const foregroundLuminance = luminance(getComputedStyle(text).fill);
+          return {
+            label: text.textContent,
+            fill: getComputedStyle(text).fill,
+            contrast: (Math.max(foregroundLuminance, backgroundLuminance) + 0.05) / (Math.min(foregroundLuminance, backgroundLuminance) + 0.05),
+          };
+        });
+        const svgStyle = getComputedStyle(svg);
+        const textRoles = ["--_text", "--_text-sec", "--_text-muted", "--_text-faint"]
+          .map((name) => svgStyle.getPropertyValue(name).trim());
+        const appShell = document.querySelector(".beautiful-app-shell");
+        const topbar = document.querySelector(".topbar");
+        const status = document.querySelector(".save-status");
+        const primaryAction = document.querySelector(".topbar .primary-button");
+        const secondaryAction = document.querySelector(".topbar .secondary-button");
+        const activeWorkspace = document.querySelector(".workspace-switcher button.active");
+        const toRgb = (hex) => {
+          const value = hex.replace("#", "");
+          const expanded = value.length === 3 ? [...value].map((digit) => digit + digit).join("") : value;
+          return `rgb(${[0, 2, 4].map((index) => Number.parseInt(expanded.slice(index, index + 2), 16)).join(", ")})`;
+        };
+        const appStyle = getComputedStyle(appShell);
+        const themeBackground = appStyle.getPropertyValue("--beautiful-theme-bg").trim();
+        const themeForeground = appStyle.getPropertyValue("--beautiful-theme-fg").trim();
+        const secondaryText = appStyle.getPropertyValue("--beautiful-text-secondary").trim();
+        const header = {
+          background: getComputedStyle(topbar).backgroundColor,
+          colour: getComputedStyle(topbar).color,
+          statusColour: getComputedStyle(status).color,
+          primaryBackground: getComputedStyle(primaryAction).backgroundColor,
+          primaryColour: getComputedStyle(primaryAction).color,
+          secondaryBackground: getComputedStyle(secondaryAction).backgroundColor,
+          activeWorkspaceBackground: getComputedStyle(activeWorkspace).backgroundColor,
+          expectedBackground: toRgb(themeBackground),
+          expectedForeground: toRgb(themeForeground),
+          expectedSecondary: toRgb(secondaryText),
+        };
+        return { minimum: Math.min(...entries.map((entry) => entry.contrast)), backgroundValue, entries, textRoles, header };
+      });
+      assert.ok(contrastReport.minimum >= 4.45, `${label} text contrast must remain readable on ${contrastReport.backgroundValue}; received ${contrastReport.minimum.toFixed(2)}:1 (${JSON.stringify(contrastReport.entries.filter((entry) => entry.contrast < 4.45))})`);
+      assert.notEqual(contrastReport.textRoles[0], contrastReport.textRoles[1], `${label} must distinguish primary node text from secondary headings`);
+      assert.ok(new Set(contrastReport.textRoles).size >= 2, `${label} must retain semantic text colour roles`);
+      assert.equal(contrastReport.header.colour, contrastReport.header.expectedForeground, `${label} title-bar text must use the primary theme role`);
+      assert.equal(contrastReport.header.statusColour, contrastReport.header.expectedSecondary, `${label} title-bar status must use the secondary role`);
+      assert.equal(contrastReport.header.primaryBackground, contrastReport.header.expectedForeground, `${label} title-bar primary action must use the theme foreground`);
+      assert.equal(contrastReport.header.primaryColour, contrastReport.header.expectedBackground, `${label} title-bar primary action must invert to the theme background`);
+      assert.equal(contrastReport.header.secondaryBackground, contrastReport.header.background, `${label} title-bar secondary actions must use its raised surface`);
+      assert.equal(contrastReport.header.activeWorkspaceBackground, contrastReport.header.expectedBackground, `${label} active workspace tab must use the panel surface`);
+    }
+  } finally {
+    await page.locator(".beautiful-theme-grid").getByRole("button", { name: /Mermade · adapts to app/ }).click();
+    await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "Editor", exact: true }).click();
+    assert.equal(await page.locator(".beautiful-app-shell").count(), 0, "the Editor workspace must restore its own title-bar palette");
+  }
+});
+
+test("Beautiful visually previews Unicode and ASCII", { timeout: 60_000 }, async () => {
+  await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "Beautiful", exact: true }).click();
+  try {
+    await page.locator(".beautiful-theme-grid").getByRole("button", { name: "Dracula", exact: true }).click();
+    await page.getByRole("tab", { name: "Unicode", exact: true }).click();
+    const unicodePreview = page.getByRole("tabpanel", { name: "UNICODE text preview" });
+    await unicodePreview.locator("pre").waitFor({ state: "visible" });
+    assert.match(await unicodePreview.locator("pre").textContent(), /[┌┐└┘─│◇○]/, "the Unicode preview must show spatial box drawing");
+    assert.ok(await unicodePreview.locator("pre code span").count() > 0, "the browser preview must use Beautiful Mermaid's themed character roles");
+    assert.equal(await page.locator(".zoom-controls > button").filter({ hasText: "100%" }).count(), 1, "text diagrams must open at a readable one-to-one scale");
+
+    await page.getByRole("tab", { name: "ASCII", exact: true }).click();
+    const asciiPreview = page.getByRole("tabpanel", { name: "ASCII text preview" });
+    await asciiPreview.locator("pre").waitFor({ state: "visible" });
+    const ascii = await asciiPreview.locator("pre").textContent();
+    assert.match(ascii, /[+|>-]/, "the ASCII preview must show terminal-safe drawing characters");
+    assert.doesNotMatch(ascii, /[┌┐└┘─│◇○]/, "pure ASCII must not contain Unicode drawing characters");
+
+    await page.getByRole("tab", { name: "Diagram", exact: true }).click();
+    await page.locator('.polished-render svg[data-renderer="beautiful-mermaid"]').waitFor({ state: "visible" });
+  } finally {
+    await page.locator(".beautiful-theme-grid").getByRole("button", { name: /Mermade · adapts to app/ }).click();
+    await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "Editor", exact: true }).click();
   }
 });
 
@@ -492,23 +673,86 @@ test("Unicode export downloads UTF-8 text without blocking on large flowcharts",
     assert.match(ordinary, /[┌┐└┘─│◇○]/, "ordinary diagrams must use Beautiful Mermaid's spatial Unicode renderer");
 
     const lines = ["flowchart TB"];
-    for (let index = 0; index < 30; index += 1) lines.push(`n${index}[\"Step ${index}\"]`);
-    for (let index = 0; index < 29; index += 1) lines.push(`n${index} --> n${index + 1}`);
+    for (let index = 0; index < 25; index += 1) lines.push(`n${index}[\"Step ${index}\"]`);
+    for (let index = 0; index < 24; index += 1) lines.push(`n${index} --> n${index + 1}`);
     await page.getByRole("button", { name: "Source", exact: true }).click();
     await page.getByRole("textbox", { name: "Mermaid source" }).fill(lines.join("\n"));
-    await page.getByRole("button", { name: "Apply to canvas" }).click();
+    await applyValidSourceAndWait();
     await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
 
     const started = Date.now();
     const large = await downloadUnicode();
     assert.ok(Date.now() - started < 10_000, "large Unicode export must remain responsive");
-    assert.match(large, /UNICODE RELATIONSHIP MAP/);
+    assert.doesNotMatch(large, /RELATIONSHIP MAP/, "large diagrams must retain Beautiful Mermaid's spatial canvas");
+    assert.match(large, /[┌┐└┘─│◇○]/);
     assert.match(large, /Step 0[\s\S]*Step 1/);
   } finally {
     await page.getByRole("button", { name: "Source", exact: true }).click();
     await page.getByRole("textbox", { name: "Mermaid source" }).fill(originalSource);
     const restore = page.getByRole("button", { name: "Apply to canvas" });
-    if (await restore.isEnabled()) await restore.click();
+    if (await restore.isEnabled()) await applyValidSourceAndWait();
+    await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+  }
+});
+
+test("dense vertical flowcharts render as spatial ASCII rather than Mermaid source", { timeout: 60_000 }, async () => {
+  await page.getByRole("button", { name: "Source", exact: true }).click();
+  const sourceEditor = page.getByRole("textbox", { name: "Mermaid source" });
+  const originalSource = await sourceEditor.inputValue();
+  const lines = ["flowchart TB"];
+  for (let index = 0; index < 20; index += 1) lines.push(`n${index}["Production step ${index}"]`);
+  for (let index = 0; index < 19; index += 1) lines.push(`n${index} --> n${index + 1}`);
+  lines.push("n2 -->|Review| n7", "n4 -->|Rework| n10", "n8 -->|Approved| n15");
+
+  try {
+    await sourceEditor.fill(lines.join("\n"));
+    await applyValidSourceAndWait();
+    await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+    await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "Beautiful", exact: true }).click();
+    await page.getByRole("tab", { name: "ASCII", exact: true }).click();
+
+    const preview = page.getByRole("tabpanel", { name: "ASCII text preview" });
+    await preview.locator("pre").waitFor({ state: "visible" });
+    const ascii = await preview.locator("pre").textContent();
+    assert.match(ascii, /Production step 0/);
+    assert.match(ascii, /[+|>-]/, "the result must contain an ASCII drawing");
+    assert.doesNotMatch(ascii, /flowchart\s+TB|n0\[|MERMAID OUTLINE/, "the preview must never expose source as an ASCII diagram");
+    await page.waitForFunction(() => {
+      const scroller = document.querySelector(".canvas-scroll");
+      const chart = scroller?.querySelector(".beautiful-text-preview pre");
+      if (!(scroller instanceof HTMLElement) || !(chart instanceof HTMLElement)) return false;
+      const viewport = scroller.getBoundingClientRect();
+      const drawing = chart.getBoundingClientRect();
+      return Math.abs(drawing.left + drawing.width / 2 - (viewport.left + viewport.width / 2)) < 4
+        && Math.abs(drawing.top + drawing.height / 2 - (viewport.top + viewport.height / 2)) < 4;
+    });
+    const canvasGeometry = await page.locator(".canvas-scroll").evaluate((scroller) => {
+      const chart = scroller.querySelector(".beautiful-text-preview pre");
+      if (!(chart instanceof HTMLElement)) throw new Error("ASCII chart is missing");
+      const viewport = scroller.getBoundingClientRect();
+      const drawing = chart.getBoundingClientRect();
+      const style = getComputedStyle(chart.parentElement);
+      return {
+        centreDeltaX: Math.abs(drawing.left + drawing.width / 2 - (viewport.left + viewport.width / 2)),
+        centreDeltaY: Math.abs(drawing.top + drawing.height / 2 - (viewport.top + viewport.height / 2)),
+        hasHorizontalCanvas: scroller.scrollWidth > scroller.clientWidth,
+        isHorizontallyCentred: scroller.scrollLeft > 0,
+        overflow: style.overflow,
+        borderWidth: style.borderWidth,
+      };
+    });
+    assert.equal(canvasGeometry.overflow, "visible", "the text chart must not be clipped by a preview box");
+    assert.equal(canvasGeometry.borderWidth, "0px", "the text chart must use the open canvas without a bounding border");
+    assert.equal(canvasGeometry.hasHorizontalCanvas, true, "a wide text chart must create a freely scrollable canvas");
+    assert.equal(canvasGeometry.isHorizontallyCentred, true, "the initial canvas position must centre a wide chart");
+    assert.ok(canvasGeometry.centreDeltaX < 4, `ASCII chart is ${canvasGeometry.centreDeltaX}px off-centre horizontally`);
+    assert.ok(canvasGeometry.centreDeltaY < 4, `ASCII chart is ${canvasGeometry.centreDeltaY}px off-centre vertically`);
+  } finally {
+    await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "Editor", exact: true }).click();
+    await page.getByRole("button", { name: "Source", exact: true }).click();
+    await page.getByRole("textbox", { name: "Mermaid source" }).fill(originalSource);
+    const restore = page.getByRole("button", { name: "Apply to canvas" });
+    if (await restore.isEnabled()) await applyValidSourceAndWait();
     await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
   }
 });
@@ -573,7 +817,7 @@ test("advanced flowcharts retain the spatial canvas, direction controls, and too
 
   await page.locator(".secondary-button").filter({ hasText: "Source" }).click();
   await page.locator(".source-editor-wrap textarea").fill(advancedSource);
-  await page.locator(".source-panel .primary-button").filter({ hasText: "Apply to canvas" }).click();
+  await applyValidSourceAndWait();
   await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
 
   const direction = page.locator('.direction-switch[aria-label="Chart direction"]');

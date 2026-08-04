@@ -198,12 +198,12 @@ test("keeps large ELK flowcharts centred, selectable, and source-deletable", asy
 test("keeps rendered Mermaid nodes stable between click and double-click", async () => {
   const editor = await readFile(new URL("../app/mermaid-editor.tsx", import.meta.url), "utf8");
 
-  assert.match(editor, /onDoubleClick=\{editMermaidElement\}/);
+  assert.match(editor, /onDoubleClick=\{viewMode === "polished" \? undefined : editMermaidElement\}/);
   assert.match(editor, /setEditingNode\(modelNode\.id\)/);
   assert.match(editor, /decorateRenderedStatements\(svgElement, source\)/);
   assert.match(editor, /aria-label="Mermaid statement"/);
   assert.match(editor, /await validateAndCommitSource\(lines\.join\("\\n"\)\)/);
-  assert.match(editor, /viewMode !== "free" && editingNode && selectedNode/);
+  assert.match(editor, /viewMode === "mermaid" && editingNode && selectedNode/);
   assert.match(editor, /\}, \[activeDiagramType\.id, activeMermaidVersion, currentLayoutCompatibilityError, diagramStyle\.layout, renderProfileClass, restoreViewAnchor, source, viewMode\]\);/);
   assert.doesNotMatch(editor, /diagram\.nodes, selected, source, viewMode/);
 });
@@ -215,7 +215,7 @@ test("anchors canvas view switches to the same logical node", async () => {
   assert.match(editor, /pendingViewAnchorRef/);
   assert.match(editor, /switchCanvasView\("free"\)/);
   assert.match(editor, /switchCanvasView\("mermaid"\)/);
-  assert.match(editor, /switchCanvasView\("polished"\)/);
+  assert.match(editor, /switchCanvasView\(workspace === "beautiful" \? "polished" : lastEditorViewRef\.current\)/);
   assert.match(editor, /restoreViewAnchor\("mermaid"\)/);
   assert.match(editor, /restoreViewAnchor\("polished"\)/);
   assert.match(editor, /restoreViewAnchor\("free"\)/);
@@ -226,27 +226,31 @@ test("switches directly between canvas views with unmodified number keys", async
   const editor = await readFile(new URL("../app/mermaid-editor.tsx", import.meta.url), "utf8");
 
   assert.match(editor, /if \(key === "1" \|\| key === "2" \|\| key === "3"\)/);
-  assert.match(editor, /switchCanvasView\(key === "1" \? "free" : key === "2" \? "mermaid" : "polished"\)/);
+  assert.match(editor, /if \(key === "3"\) switchWorkspace\("beautiful"\)/);
+  assert.match(editor, /else switchCanvasView\(key === "1" \? "free" : "mermaid"\)/);
   assert.match(editor, /aria-keyshortcuts="1"/);
   assert.match(editor, /aria-keyshortcuts="2"/);
   assert.match(editor, /aria-keyshortcuts="3"/);
   assert.match(editor, />FreeForm canvas<\/b><kbd>1<\/kbd>/);
   assert.match(editor, />Mermaid canvas<\/b><kbd>2<\/kbd>/);
-  assert.match(editor, />Beautiful canvas<\/b><kbd>3<\/kbd>/);
+  assert.match(editor, />Beautiful workspace<\/b><kbd>3<\/kbd>/);
   assert.match(editor, /targetView === "polished" && !polishedSupported[\s\S]{0,160}is not yet supported by Beautiful Mermaid/);
 });
 
-test("loads Beautiful Mermaid as a compatible third canvas without replacing canonical source", async () => {
-  const [editor, adapter, css, packageJson] = await Promise.all([
+test("loads Beautiful Mermaid as a distinct presentation workspace without replacing canonical source", async () => {
+  const [editor, adapter, config, css, worker, packageJson] = await Promise.all([
     readFile(new URL("../app/mermaid-editor.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/beautiful-mermaid.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/beautiful-mermaid-config.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+    readFile(new URL("../app/unicode-renderer.worker.ts", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
   ]);
 
   assert.match(editor, /type CanvasView = "free" \| "mermaid" \| "polished"/);
-  assert.match(editor, /Beautiful Mermaid renderer/);
-  assert.match(editor, /Beautiful view could not render this valid Mermaid diagram/);
+  assert.match(editor, /Beautiful workspace/);
+  assert.match(editor, /key="beautiful-render"/);
+  assert.match(editor, /Beautiful could not present this valid Mermaid diagram/);
   assert.match(editor, /function BeautifulMermaidMark/);
   for (const piece of ["top-left", "top-right", "bottom-left", "bottom-right"]) {
     assert.match(editor, new RegExp(`badge-piece-${piece}`));
@@ -255,11 +259,43 @@ test("loads Beautiful Mermaid as a compatible third canvas without replacing can
   assert.doesNotMatch(editor, /M3\.17890888,3\.6 L3\.17890888,0/);
   assert.match(css, /\.beautiful-mermaid-mark \.badge-piece \{[^}]*fill: none;[^}]*stroke: var\(--purple\);[^}]*stroke-width: 1\.2;/);
   assert.doesNotMatch(css, /\.beautiful-mermaid-mark \.badge-piece-(?:top|bottom)-(?:left|right) \{[^}]*fill:/);
+  assert.match(editor, /from "\.\/beautiful-mermaid-config"/);
+  assert.doesNotMatch(editor, /from "\.\/beautiful-mermaid"/);
+  assert.match(editor, /beautifulWorkspacePromise \?\?= import\("\.\/beautiful-mermaid"\)/);
+  assert.match(editor, /aria-label="Workspace"/);
+  assert.match(editor, /className="beautiful-inspector-body"/);
+  assert.match(editor, /aria-label="Beautiful output preview"/);
+  for (const preview of ["Diagram", "Unicode", "ASCII"]) assert.match(editor, new RegExp(`"${preview}"`));
+  assert.doesNotMatch(editor, /\["source", "Mermaid"\]/);
+  assert.doesNotMatch(editor, /Presentation preview|Source-safe · Beautiful Mermaid|Copyable · downloadable|beautiful-preview-meta/);
+  assert.match(editor, /POLISHED_THEME_PREVIEWS/);
+  assert.match(editor, /BEAUTIFUL_COLOUR_ROLES/);
+  assert.match(editor, /BEAUTIFUL_DENSITY_PRESETS/);
+  assert.match(editor, /Return to the Editor workspace to change diagram structure/);
+  assert.match(css, /\.workspace\.beautiful-workspace/);
+  assert.match(editor, /className=\{`app-shell \$\{viewMode === "polished" \? "beautiful-app-shell" : ""\}`\}/);
+  assert.match(css, /\.beautiful-app-shell \.topbar \{[^}]*background: var\(--beautiful-ui-raised\)/);
+  assert.match(css, /\.beautiful-app-shell \.topbar \.primary-button \{[^}]*color: var\(--beautiful-theme-bg\);[^}]*background: var\(--beautiful-theme-fg\)/);
+  assert.match(css, /\.beautiful-theme-grid/);
+  assert.match(css, /\.workspace\.beautiful-workspace[\s\S]{0,160}--beautiful-ui-bg/);
+  assert.match(css, /\.diagram-surface\.beautiful-surface \{ background-color: var\(--beautiful-theme-bg\)/);
+  assert.doesNotMatch(config, /beautiful-mermaid"|renderMermaidSVG|renderMermaidASCII/);
   assert.match(adapter, /await import\("beautiful-mermaid"\)/);
   assert.match(adapter, /sourceForPolishedRenderer/);
   assert.match(adapter, /new DOMParser\(\)/);
   assert.match(adapter, /data-mermade-contrast/);
-  assert.match(editor, /host\.style\.backgroundColor = svgElement\.style\.getPropertyValue\("--bg"\)\.trim\(\) \|\| "transparent"/);
+  assert.match(adapter, /--_text-sec: \$\{textRoles\.secondary\}/);
+  assert.match(adapter, /polishedTextRoles\(selectedTheme\)/);
+  assert.match(css, /\.beautiful-text-preview pre \{[^}]*SFMono-Regular[^}]*font-variant-ligatures: none/);
+  assert.match(css, /\.beautiful-text-preview \{[^}]*overflow: visible;[^}]*background: transparent;/);
+  assert.doesNotMatch(css, /\.beautiful-text-preview \{[^}]*(?:border|box-shadow|overflow: hidden)/);
+  assert.match(worker, /sourceForSpatialTextRenderer\(adapted\)/);
+  assert.match(worker, /renderMermaidASCII\(textLayout\.source, \{ \.\.\.options, colorMode: "none" \}\)/);
+  assert.match(worker, /colorMode: "html"/);
+  assert.match(worker, /layoutAdapted: textLayout\.layoutAdapted/);
+  assert.doesNotMatch(worker, /relationshipMap|RELATIONSHIP MAP/);
+  assert.match(editor, /Text diagram could not be rendered/);
+  assert.match(editor, /host\.style\.backgroundColor = polishedStyle\.transparent \? "transparent" : previewBackground/);
   assert.equal(JSON.parse(packageJson).dependencies["beautiful-mermaid"], "^1.1.3");
 });
 

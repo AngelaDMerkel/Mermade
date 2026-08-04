@@ -39,7 +39,7 @@ Mermade exists to close that gap.
 flowchart LR
   I[Create or import] --> S[(Canonical Mermaid source)]
   S <--> M[Mermaid render view]
-  S --> B[Beautiful render view]
+  S --> B[Beautiful presentation workspace]
   S <--> V[Visual editing mode]
   S <--> E[Source editor]
   S --> X[Mermaid and SVG export]
@@ -52,7 +52,7 @@ Candidate edits are parsed by the selected Mermaid engine before they are commit
 ### Visual and source editing
 
 - Mermaid render view is the default and supports selection, marquee selection, panning, zooming, and fit-to-chart. Flowchart nodes edit directly; rendered labels in every other registered family map back to a complete Mermaid statement which is validated before it can replace the source.
-- Beautiful view directly integrates Beautiful Mermaid for supported Flowchart, State, Sequence, Class, Entity Relationship, and XY diagrams. It adds an adaptive seven-role Mermade palette, all 15 bundled themes, transparent rendering, layout density controls, Mermaid-style priority, richer flowchart shapes, and interactive XY data tips without rewriting canonical source.
+- The distinct Beautiful workspace directly integrates Beautiful Mermaid for supported Flowchart, State, Sequence, Class, Entity Relationship, and XY diagrams. It offers an adaptive seven-role Mermade palette, all 15 bundled themes, custom palettes, transparent export, layout density controls, richer flowchart shapes, and interactive XY data tips without rewriting canonical source. Diagram, Unicode, and pure ASCII previews make each presentation output visible before download. The selected Beautiful palette owns the presentation by default; source colour overrides can be enabled explicitly when Mermaid style directives should take priority. Structure remains editable in the Editor or Source, while Beautiful concentrates on presentation and export.
 - FreeForm editing provides direct spatial control for graph and spatial diagram families, including exact Mermaid flowchart shapes.
 - Structured editing presents ordered, lane-based, sequence, timeline, and grammar-oriented diagrams as editable statements.
 - Data editing presents chart and dataset-oriented syntax as editable data statements.
@@ -76,7 +76,7 @@ Candidate edits are parsed by the selected Mermaid engine before they are commit
 - Automatic Mermaid version detection chooses between bundled Mermaid 11.16 and Mermaid 10.9 compatibility; the engine can also be selected explicitly.
 - Layered repair suggestions cover safe normalisation, version compatibility, and diagram-specific structural problems before any change is applied.
 - Light, dark, and system themes, configurable grid and snapping, keyboard shortcut help, a welcome screen, and an optional guided tour are included.
-- Export produces reusable Mermaid source, `.mmd` files, Mermaid SVG, Beautiful Mermaid SVG for compatible diagrams, or a Unicode text rendering.
+- Export produces reusable Mermaid source, `.mmd` files, Mermaid SVG, Beautiful Mermaid SVG for compatible diagrams, or Unicode and pure ASCII text renderings.
 
 ## Feature gallery
 
@@ -216,7 +216,7 @@ The test suite covers:
 - **Diagram-specific regressions:** known rendering risks, including C4 title placement, receive explicit checks.
 - **Style portability:** registered diagrams continue to parse and render with Mermade's Mermaid frontmatter, supported themes, rendering looks, and applicable layout engines.
 - **Interaction behaviour:** onboarding, the guided tour, source repair, source undo/redo, direct Mermaid node and statement editing, FreeForm shapes, marquee selection, and view-position preservation are browser-tested.
-- **Canvas compatibility:** all registered diagram types are exercised in Mermaid mode and their intended FreeForm, Structured, or Data editor; the six Beautiful Mermaid families are additionally exercised in Beautiful mode.
+- **Workspace compatibility:** all registered diagram types are exercised in Mermaid mode and their intended FreeForm, Structured, or Data editor; the six Beautiful Mermaid families are additionally exercised in the Beautiful presentation workspace.
 - **Static delivery:** generated HTML, metadata, branding, licence declarations, and the GitHub Pages workflow have regression coverage.
 
 Rendering tests use Playwright Core with an installed Google Chrome. Set `CHROME_PATH` if Chrome is installed in a nonstandard location.
@@ -242,7 +242,7 @@ Mermade stands on a mature ecosystem and deliberately distinguishes dependencies
 ### Software
 
 - Diagram parsing and SVG rendering are powered by [Mermaid](https://github.com/mermaid-js/mermaid), installed as an npm dependency under Mermaid's own licence.
-- The optional Beautiful canvas and SVG/Unicode exports use [Beautiful Mermaid](https://github.com/lukilabs/beautiful-mermaid), installed under its MIT licence. Its interface icon is an original 24-pixel, Mermaid-pink interpretation of the four-part badge used by Beautiful Mermaid's live editor; no upstream brand asset or path data is bundled. Mermade uses its published specialist renderers, enriched theme roles, ELK spacing options, shape vocabulary, and XY interaction support through a source-preserving adapter. Beautiful Mermaid remains an alternative renderer; official Mermaid continues to validate canonical project source.
+- The optional Beautiful workspace and SVG, Unicode, and ASCII outputs use [Beautiful Mermaid](https://github.com/lukilabs/beautiful-mermaid), installed under its MIT licence. Beautiful Mermaid credits [mermaid-ascii](https://github.com/AlexanderGrooff/mermaid-ascii) as the foundation of its terminal renderer. Its interface icon is an original 24-pixel, Mermaid-pink interpretation of the four-part badge used by Beautiful Mermaid's live editor; no upstream brand asset or path data is bundled. Mermade uses its published specialist renderers, enriched theme roles, ELK spacing options, shape vocabulary, and XY interaction support through a source-preserving adapter. Beautiful Mermaid remains an alternative presentation renderer; official Mermaid continues to validate canonical project source.
 - ELK and Tidy Tree layouts use Mermaid's official [`@mermaid-js/layout-elk`](https://www.npmjs.com/package/@mermaid-js/layout-elk) and [`@mermaid-js/layout-tidy-tree`](https://www.npmjs.com/package/@mermaid-js/layout-tidy-tree) packages.
 - ZenUML support uses Mermaid's official [`@mermaid-js/mermaid-zenuml`](https://github.com/mermaid-js/mermaid/tree/develop/packages/mermaid-zenuml) plugin.
 - Interface icons are provided by [Lucide](https://github.com/lucide-icons/lucide). The application is built with [React](https://react.dev/) and [Next.js](https://nextjs.org/).
@@ -279,7 +279,7 @@ This is a **source-available noncommercial licence**, not an OSI-approved open-s
 
 - [x] Browser-local projects with static GitHub Pages deployment
 - [x] Mermaid and FreeForm views with position-preserving switching
-- [x] Deep Beautiful Mermaid canvas with adaptive and bundled themes, source-style isolation, specialist renderers, interactive XY charts, SVG export, and Unicode export
+- [x] Dedicated Beautiful Mermaid workspace with adaptive, bundled, and custom themes, source-style isolation, specialist renderers, interactive XY charts, SVG export, and Unicode export
 - [x] Source editing, import, export, undo/redo, and layered repair
 - [x] Flowchart node, relationship, shape, multi-select, marquee, and subgraph tools
 - [x] Diagram-wide themes, rendering styles, layouts, and palette controls

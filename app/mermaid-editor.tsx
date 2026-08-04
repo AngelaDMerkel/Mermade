@@ -15,15 +15,20 @@ import {
   ExternalLink,
   Group,
   Link2,
+  LoaderCircle,
   Maximize2,
   Minimize2,
   Monitor,
   Moon,
   MousePointer2,
+  Palette,
+  Pencil,
   Plus,
   Redo2,
   RotateCcw,
+  Search,
   Settings2,
+  SlidersHorizontal,
   Sparkles,
   Sun,
   Trash2,
@@ -45,10 +50,21 @@ import {
   useState,
 } from "react";
 import { SemanticVisualEditor } from "./semantic-visual-editor";
-import { DEFAULT_POLISHED_STYLE, normalisePolishedStyle, POLISHED_THEME_OPTIONS, PolishedStyle, PolishedTheme, renderPolishedSvg, supportsPolishedDiagram } from "./beautiful-mermaid";
+import { accessiblePolishedTextColour, DEFAULT_POLISHED_STYLE, normalisePolishedStyle, polishedTextRoles, POLISHED_THEME_OPTIONS, POLISHED_THEME_PREVIEWS, PolishedCustomColours, PolishedStyle, supportsPolishedDiagram } from "./beautiful-mermaid-config";
 import { layoutFlowchart } from "./flowchart-layout";
 import { appendFlowchartStatements, appendFlowchartSubgraph, canUseNativeFlowchartEditor, flowchartNodeIds, removeFlowchartItems, updateFlowchartDirection, updateFlowchartEdgeStatement, updateFlowchartNodeStatement, updateFlowchartSubgraphStatement } from "./flowchart-source";
 import { layoutCompatibilityError } from "./layout-compatibility";
+import {
+  createLocalDiagramId,
+  initialiseLocalDiagramLibrary,
+  LocalDiagramIndex,
+  LocalDiagramSummary,
+  readLocalDiagramDocument,
+  removeLocalDiagramDocument,
+  updateLocalDiagramIndex,
+  writeLocalDiagramDocument,
+  writeLocalDiagramIndex,
+} from "./local-diagram-library";
 import { flowchartShapePatch, FLOWCHART_SHAPE_GROUPS, FlowchartVisualShape, mermaidShapeClass, selectedFlowchartShape, visualShapeForMermaid } from "./flowchart-shapes";
 import { diagramNameFromFile, MERMAID_IMPORT_ACCEPT, readImportedMermaid } from "./mermaid-import";
 import { helpForDiagram } from "./mermaid-help";
@@ -56,7 +72,7 @@ import { decorateRenderedStatements, normalizeRenderedSvg, normalizeSvgMarkup } 
 import { createRepairProposals, RepairProposal, RepairVersion } from "./mermaid-repair";
 import { applyDiagramStyle, DEFAULT_DIAGRAM_STYLE, DiagramStyle, MermaidLayout, MermaidLook, MermaidTheme, readDiagramStyle } from "./mermaid-style";
 import { detectDiagramType, MERMAID_DIAGRAM_TYPES, visualModeLabel } from "./mermaid-types";
-import { renderUnicodeDiagram } from "./unicode-export";
+import { renderTextDiagram, TextDiagramFormat } from "./unicode-export";
 
 type NodeShape = FlowchartVisualShape;
 type EdgeStyle = "solid" | "dashed" | "thick";
@@ -64,6 +80,31 @@ type ThemeMode = "light" | "dark" | "system";
 type SupportedMermaidVersion = "11.16.0" | "10.9.6";
 type MermaidVersionPreference = "auto" | SupportedMermaidVersion;
 type CanvasView = "free" | "mermaid" | "polished";
+type BeautifulPreviewMode = "diagram" | "unicode" | "ascii";
+
+const BEAUTIFUL_DENSITY_PRESETS = [
+  { id: "compact", label: "Compact", description: "Dense working diagrams", values: { padding: 24, nodeSpacing: 16, layerSpacing: 28, componentSpacing: 24 } },
+  { id: "balanced", label: "Balanced", description: "Everyday presentation", values: { padding: 40, nodeSpacing: 28, layerSpacing: 48, componentSpacing: 36 } },
+  { id: "spacious", label: "Spacious", description: "Room for projection", values: { padding: 64, nodeSpacing: 46, layerSpacing: 76, componentSpacing: 58 } },
+] as const;
+
+const BEAUTIFUL_COLOUR_ROLES: Array<[keyof PolishedCustomColours, string]> = [
+  ["bg", "Background"],
+  ["fg", "Foreground"],
+  ["accent", "Accent"],
+  ["line", "Connectors"],
+  ["muted", "Muted text"],
+  ["surface", "Node surface"],
+  ["border", "Node border"],
+];
+
+let beautifulWorkspacePromise: Promise<typeof import("./beautiful-mermaid")> | null = null;
+
+/** Keep the Beautiful adapter and third-party renderer out of the initial workspace bundle. */
+function loadBeautifulWorkspace() {
+  beautifulWorkspacePromise ??= import("./beautiful-mermaid");
+  return beautifulWorkspacePromise;
+}
 
 function BeautifulMermaidMark({ size = 14 }: { size?: number }) {
   return (
@@ -641,6 +682,53 @@ function parseMermaid(source: string, previous: Diagram): Diagram | null {
   };
 }
 
+function restoreStoredDiagram(value: unknown): Diagram | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const restored = value as Partial<Diagram>;
+  if (!Array.isArray(restored.nodes) || !Array.isArray(restored.edges) || !Array.isArray(restored.groups)) return null;
+  const diagram = restored as Diagram;
+  const restoredFlowchart = diagram.source && detectDiagramType(diagram.source)?.id === "flowchart"
+    ? parseMermaid(diagram.source, diagram)
+    : null;
+  return {
+    ...(restoredFlowchart ? { ...restoredFlowchart, source: diagram.source } : diagram),
+    name: typeof diagram.name === "string" && diagram.name.trim() ? diagram.name : "Untitled diagram",
+    style: { ...DEFAULT_DIAGRAM_STYLE, ...(diagram.style || {}) },
+    polishedStyle: normalisePolishedStyle(diagram.polishedStyle),
+  };
+}
+
+function createBlankDiagram(name = "Untitled diagram"): Diagram {
+  return {
+    name,
+    direction: "LR",
+    mermaidVersion: "auto",
+    detectedMermaidVersion: LATEST_MERMAID_VERSION,
+    style: { ...DEFAULT_DIAGRAM_STYLE },
+    polishedStyle: normalisePolishedStyle(DEFAULT_POLISHED_STYLE),
+    nodes: [],
+    edges: [],
+    groups: [],
+  };
+}
+
+function uniqueLocalDiagramName(name: string, documents: LocalDiagramSummary[]) {
+  const existing = new Set(documents.map((document) => document.name.trim().toLocaleLowerCase()));
+  if (!existing.has(name.toLocaleLowerCase())) return name;
+  let suffix = 2;
+  while (existing.has(`${name} ${suffix}`.toLocaleLowerCase())) suffix += 1;
+  return `${name} ${suffix}`;
+}
+
+function formatLocalDiagramDate(value: number) {
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(value);
+}
+
 function IconButton({ label, shortcut, active, disabled, onClick, children, className = "" }: {
   label: string; shortcut?: string; active?: boolean; disabled?: boolean; onClick?: () => void; children: React.ReactNode; className?: string;
 }) {
@@ -667,10 +755,21 @@ export function MermaidEditor() {
   const [sourceFuture, setSourceFuture] = useState<string[]>([]);
   const [exportOpen, setExportOpen] = useState(false);
   const [unicodeExporting, setUnicodeExporting] = useState(false);
+  const [beautifulPreviewMode, setBeautifulPreviewMode] = useState<BeautifulPreviewMode>("diagram");
+  const [beautifulTextPreview, setBeautifulTextPreview] = useState("");
+  const [beautifulTextHtml, setBeautifulTextHtml] = useState("");
+  const [beautifulTextError, setBeautifulTextError] = useState("");
+  const [beautifulTextLayoutAdapted, setBeautifulTextLayoutAdapted] = useState(false);
+  const [beautifulTextLoading, setBeautifulTextLoading] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [typeMenuOpen, setTypeMenuOpen] = useState(false);
+  const [localDiagramMenuOpen, setLocalDiagramMenuOpen] = useState(false);
+  const [localDiagramSearch, setLocalDiagramSearch] = useState("");
+  const [pendingLocalDeleteId, setPendingLocalDeleteId] = useState<string | null>(null);
+  const [localStorageStatus, setLocalStorageStatus] = useState<"saving" | "saved" | "unavailable">("saved");
+  const [localDiagramIndex, setLocalDiagramIndex] = useState<LocalDiagramIndex>({ version: 1, activeId: "", documents: [] });
   const [preferences, setPreferences] = useState<EditorPreferences>(DEFAULT_PREFERENCES);
   const [storageReady, setStorageReady] = useState(false);
   const [toast, setToast] = useState("");
@@ -683,6 +782,7 @@ export function MermaidEditor() {
   const [mermaidRenderRevision, setMermaidRenderRevision] = useState(0);
   const [mermaidRenderError, setMermaidRenderError] = useState("");
   const [polishedSize, setPolishedSize] = useState({ width: 1200, height: 800 });
+  const [beautifulTextSize, setBeautifulTextSize] = useState({ width: 240, height: 120 });
   const [polishedRenderRevision, setPolishedRenderRevision] = useState(0);
   const [polishedRenderError, setPolishedRenderError] = useState("");
   const [invalidSource, setInvalidSource] = useState("");
@@ -701,6 +801,7 @@ export function MermaidEditor() {
   const mermaidStageRef = useRef<HTMLDivElement>(null);
   const mermaidViewRef = useRef<HTMLDivElement>(null);
   const polishedViewRef = useRef<HTMLDivElement>(null);
+  const beautifulTextPreRef = useRef<HTMLPreElement>(null);
   const dragRef = useRef<null | { startX: number; startY: number; nodes: Map<string, { x: number; y: number }> }>(null);
   const marqueeRef = useRef<MarqueeSelection | null>(null);
   const marqueeSurfaceRef = useRef<HTMLDivElement | null>(null);
@@ -711,27 +812,80 @@ export function MermaidEditor() {
   const shouldFitPolishedRef = useRef(true);
   const shouldFitFreeformRef = useRef(false);
   const pendingViewAnchorRef = useRef<PendingViewAnchor | null>(null);
+  const lastEditorViewRef = useRef<Exclude<CanvasView, "polished">>("mermaid");
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const typeMenuRef = useRef<HTMLDivElement>(null);
+  const localDiagramMenuRef = useRef<HTMLDivElement>(null);
+  const documentNameRef = useRef<HTMLInputElement>(null);
+  const localDiagramIndexRef = useRef<LocalDiagramIndex>({ version: 1, activeId: "", documents: [] });
+  const localDiagramCacheRef = useRef(new Map<string, Diagram>());
   const importInputRef = useRef<HTMLInputElement>(null);
   const sourceLastEditAtRef = useRef(0);
   const diagramRef = useRef(diagram);
 
   const diagramStyle = diagram.style || DEFAULT_DIAGRAM_STYLE;
-  const polishedStyle = normalisePolishedStyle(diagram.polishedStyle);
+  const polishedStyle = useMemo(() => normalisePolishedStyle(diagram.polishedStyle), [diagram.polishedStyle]);
+  const beautifulWorkspaceStyle = useMemo(() => {
+    const palette = polishedStyle.paletteMode === "custom"
+      ? polishedStyle.customColours
+      : POLISHED_THEME_PREVIEWS[polishedStyle.theme];
+    const adaptive = polishedStyle.paletteMode === "theme" && polishedStyle.theme === "mermade-auto";
+    const readableForeground = accessiblePolishedTextColour(palette.fg, palette.bg);
+    const textRoles = polishedTextRoles(palette);
+    return {
+      "--beautiful-theme-bg": adaptive ? "var(--mermade-polished-bg)" : palette.bg,
+      "--beautiful-theme-fg": adaptive ? "var(--mermade-polished-fg)" : readableForeground,
+      "--beautiful-theme-accent": palette.accent,
+      "--beautiful-text-secondary": adaptive ? "var(--mermade-polished-fg)" : textRoles.secondary,
+      "--beautiful-text-muted": adaptive ? "var(--mermade-polished-fg)" : textRoles.muted,
+      "--beautiful-text-faint": adaptive ? "var(--mermade-polished-fg)" : textRoles.faint,
+      ...(palette.line ? { "--beautiful-theme-line": palette.line } : {}),
+      ...(palette.muted ? { "--beautiful-theme-muted": palette.muted } : {}),
+      ...(palette.surface ? { "--beautiful-theme-surface": palette.surface } : {}),
+      ...(palette.border ? { "--beautiful-theme-border": palette.border } : {}),
+    } as React.CSSProperties;
+  }, [polishedStyle]);
+  const beautifulTextTheme = useMemo(() => {
+    const adaptive = polishedStyle.paletteMode === "theme" && polishedStyle.theme === "mermade-auto";
+    if (adaptive) return undefined;
+    const palette = polishedStyle.paletteMode === "custom"
+      ? polishedStyle.customColours
+      : POLISHED_THEME_PREVIEWS[polishedStyle.theme];
+    return {
+      bg: palette.bg,
+      fg: accessiblePolishedTextColour(palette.fg, palette.bg),
+      line: palette.line,
+      accent: palette.accent,
+      border: palette.border,
+    };
+  }, [polishedStyle]);
   const source = useMemo(() => diagram.source ?? applyDiagramStyle(toMermaid(diagram), diagram.style || DEFAULT_DIAGRAM_STYLE), [diagram]);
   const renderProfileClass = diagram.source && diagram.renderProfile === "dokuwiki" ? "dokuwiki-mermaid" : "";
   const activeDiagramType = useMemo(() => detectDiagramType(source) || MERMAID_DIAGRAM_TYPES[0], [source]);
   const activeHelp = useMemo(() => helpForDiagram(activeDiagramType.id), [activeDiagramType.id]);
   const visualModeName = visualModeLabel(activeDiagramType.family);
   const polishedSupported = supportsPolishedDiagram(activeDiagramType.id);
-  const renderedSize = viewMode === "polished" ? polishedSize : mermaidSize;
+  const renderedSize = viewMode === "polished"
+    ? (beautifulPreviewMode === "diagram" ? polishedSize : beautifulTextSize)
+    : mermaidSize;
   const visualEditingHelp = activeDiagramType.family === "freeform"
     ? "FreeForm exposes nodes and relationships spatially. Mermaid view remains available for the exact rendered result and source-level control."
     : activeDiagramType.family === "structured"
       ? "Structured editing preserves the ordered statements and interactions that define this diagram. Mermaid view shows the exact rendered result."
       : "Data editing keeps labels, values, axes, and series explicit while Mermaid view shows the exact rendered result.";
   const nativeFlowchart = activeDiagramType.id === "flowchart" && diagram.nodes.length > 0;
+  const filteredLocalDiagrams = useMemo(() => {
+    const query = localDiagramSearch.trim().toLocaleLowerCase();
+    return query
+      ? localDiagramIndex.documents.filter((document) => document.name.toLocaleLowerCase().includes(query))
+      : localDiagramIndex.documents;
+  }, [localDiagramIndex.documents, localDiagramSearch]);
+  const activeLocalDiagram = localDiagramIndex.documents.find((document) => document.id === localDiagramIndex.activeId);
+  const localStorageStatusLabel = localStorageStatus === "saving"
+    ? "Saving…"
+    : localStorageStatus === "unavailable"
+      ? "Storage unavailable or full"
+      : "Saved locally";
   const activeMermaidVersion = resolvedMermaidVersion(diagram);
   const modernStyleFeatures = activeMermaidVersion !== "10.9.6";
   const availableLayoutOptions = layoutOptionsForDiagram(activeDiagramType.id);
@@ -786,6 +940,159 @@ export function MermaidEditor() {
     if (toastTimer.current) clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToast(""), 2200);
   }, []);
+
+  const replaceLocalDiagramIndex = useCallback((next: LocalDiagramIndex) => {
+    localDiagramIndexRef.current = next;
+    setLocalDiagramIndex(next);
+  }, []);
+
+  const persistLocalDiagram = useCallback((id: string, value: Diagram, makeActive = true) => {
+    const currentIndex = localDiagramIndexRef.current;
+    const previous = currentIndex.documents.find((document) => document.id === id);
+    const now = Date.now();
+    const summary: LocalDiagramSummary = {
+      id,
+      name: value.name.trim() || "Untitled diagram",
+      createdAt: previous?.createdAt ?? now,
+      updatedAt: now,
+    };
+    const nextIndex = updateLocalDiagramIndex(currentIndex, summary, makeActive ? id : currentIndex.activeId);
+    localDiagramCacheRef.current.set(id, clone(value));
+    const stored = writeLocalDiagramDocument(localStorage, {
+      version: 1,
+      ...summary,
+      diagram: value,
+    }) && writeLocalDiagramIndex(localStorage, nextIndex);
+    replaceLocalDiagramIndex(nextIndex);
+    setLocalStorageStatus(stored ? "saved" : "unavailable");
+    return stored;
+  }, [replaceLocalDiagramIndex]);
+
+  const resetEditorForLocalDiagram = useCallback((next: Diagram) => {
+    history.current = [];
+    future.current = [];
+    diagramRef.current = next;
+    setDiagram(next);
+    setSelected(next.nodes[0] ? [next.nodes[0].id] : []);
+    edgeCounter.current = Math.max(0, ...next.edges.map((edge) => Number(edge.id.match(/^e(\d+)$/)?.[1]) || 0)) + 1;
+    setConnectionStart(null);
+    setEditingNode(null);
+    setEditingGroup(null);
+    setEditingSourceLine(null);
+    setSourceOpen(false);
+    setSourceDraft("");
+    setSourceDirty(false);
+    setSourcePast([]);
+    setSourceFuture([]);
+    setExportOpen(false);
+    setInvalidSource("");
+    setSyntaxError("");
+    setMermaidRenderError("");
+    setPolishedRenderError("");
+    setRepairOpen(false);
+    setRepairOptions([]);
+    shouldFitMermaidRef.current = true;
+    shouldFitPolishedRef.current = true;
+    shouldFitFreeformRef.current = true;
+    const targetSource = next.source ?? applyDiagramStyle(toMermaid(next), next.style || DEFAULT_DIAGRAM_STYLE);
+    const targetType = detectDiagramType(targetSource);
+    if (viewMode === "polished" && targetType && !supportsPolishedDiagram(targetType.id)) {
+      setViewMode("mermaid");
+      lastEditorViewRef.current = "mermaid";
+    }
+  }, [viewMode]);
+
+  const activateLocalDiagram = useCallback((id: string, persistCurrent = true) => {
+    const currentId = localDiagramIndexRef.current.activeId;
+    if (id === currentId) {
+      setLocalDiagramMenuOpen(false);
+      return;
+    }
+    if (persistCurrent && currentId) persistLocalDiagram(currentId, diagramRef.current);
+    const stored = localDiagramCacheRef.current.get(id)
+      ?? readLocalDiagramDocument<Diagram>(localStorage, id)?.diagram;
+    const restored = restoreStoredDiagram(stored);
+    if (!restored) {
+      notify("That local diagram could not be opened");
+      return;
+    }
+    localDiagramCacheRef.current.set(id, clone(restored));
+    const nextIndex = { ...localDiagramIndexRef.current, activeId: id };
+    const indexStored = writeLocalDiagramIndex(localStorage, nextIndex);
+    replaceLocalDiagramIndex(nextIndex);
+    if (!indexStored) setLocalStorageStatus("unavailable");
+    resetEditorForLocalDiagram(restored);
+    setLocalDiagramMenuOpen(false);
+    setPendingLocalDeleteId(null);
+    notify(`Opened ${restored.name}`);
+  }, [notify, persistLocalDiagram, replaceLocalDiagramIndex, resetEditorForLocalDiagram]);
+
+  const createLocalDiagram = useCallback(() => {
+    const currentId = localDiagramIndexRef.current.activeId;
+    if (currentId) persistLocalDiagram(currentId, diagramRef.current);
+    const name = uniqueLocalDiagramName("Untitled diagram", localDiagramIndexRef.current.documents);
+    const next = createBlankDiagram(name);
+    const id = createLocalDiagramId();
+    persistLocalDiagram(id, next);
+    resetEditorForLocalDiagram(next);
+    setLocalDiagramMenuOpen(false);
+    setPendingLocalDeleteId(null);
+    notify("Created a new local diagram");
+    requestAnimationFrame(() => documentNameRef.current?.select());
+  }, [notify, persistLocalDiagram, resetEditorForLocalDiagram]);
+
+  const duplicateLocalDiagram = useCallback(() => {
+    const currentId = localDiagramIndexRef.current.activeId;
+    if (currentId) persistLocalDiagram(currentId, diagramRef.current);
+    const baseName = `${diagramRef.current.name.trim() || "Untitled diagram"} copy`;
+    const name = uniqueLocalDiagramName(baseName, localDiagramIndexRef.current.documents);
+    const next = { ...clone(diagramRef.current), name };
+    const id = createLocalDiagramId();
+    persistLocalDiagram(id, next);
+    resetEditorForLocalDiagram(next);
+    setLocalDiagramMenuOpen(false);
+    setPendingLocalDeleteId(null);
+    notify("Duplicated the local diagram");
+  }, [notify, persistLocalDiagram, resetEditorForLocalDiagram]);
+
+  const renameLocalDiagram = useCallback(() => {
+    setLocalDiagramMenuOpen(false);
+    setPendingLocalDeleteId(null);
+    requestAnimationFrame(() => {
+      documentNameRef.current?.focus();
+      documentNameRef.current?.select();
+    });
+  }, []);
+
+  const deleteLocalDiagram = useCallback((id: string) => {
+    const currentIndex = localDiagramIndexRef.current;
+    const deleted = currentIndex.documents.find((document) => document.id === id);
+    const remaining = currentIndex.documents.filter((document) => document.id !== id);
+    removeLocalDiagramDocument(localStorage, id);
+    localDiagramCacheRef.current.delete(id);
+
+    if (remaining.length) {
+      const activeId = id === currentIndex.activeId ? remaining[0].id : currentIndex.activeId;
+      const nextIndex: LocalDiagramIndex = { version: 1, activeId, documents: remaining };
+      const stored = writeLocalDiagramIndex(localStorage, nextIndex);
+      replaceLocalDiagramIndex(nextIndex);
+      if (!stored) setLocalStorageStatus("unavailable");
+      if (id === currentIndex.activeId) {
+        const nextValue = localDiagramCacheRef.current.get(activeId)
+          ?? readLocalDiagramDocument<Diagram>(localStorage, activeId)?.diagram;
+        const restored = restoreStoredDiagram(nextValue);
+        if (restored) resetEditorForLocalDiagram(restored);
+      }
+    } else {
+      replaceLocalDiagramIndex({ version: 1, activeId: "", documents: [] });
+      const next = createBlankDiagram();
+      persistLocalDiagram(createLocalDiagramId(), next);
+      resetEditorForLocalDiagram(next);
+    }
+    setPendingLocalDeleteId(null);
+    setLocalDiagramMenuOpen(false);
+    notify(`Deleted ${deleted?.name || "the local diagram"}`);
+  }, [notify, persistLocalDiagram, replaceLocalDiagramIndex, resetEditorForLocalDiagram]);
 
   useEffect(() => {
     selectedRef.current = selected;
@@ -843,22 +1150,30 @@ export function MermaidEditor() {
   }, [diagram]);
 
   useEffect(() => {
-    const savedDiagram = readStoredObject("mermade-diagram");
     const savedPreferences = readStoredObject("mermade-preferences");
     let showWelcome = true;
+    let restored = clone(initialDiagram);
+    let index: LocalDiagramIndex;
+    let storageAvailable = false;
+    try {
+      const library = initialiseLocalDiagramLibrary(localStorage, restored, restored.name);
+      restored = restoreStoredDiagram(library.document?.diagram) ?? restored;
+      index = library.index;
+      storageAvailable = library.storageAvailable;
+    } catch {
+      const now = Date.now();
+      const id = createLocalDiagramId(now);
+      index = { version: 1, activeId: id, documents: [{ id, name: restored.name, createdAt: now, updatedAt: now }] };
+    }
     try { showWelcome = !localStorage.getItem(ONBOARDING_KEY); } catch { /* private browsing can block storage */ }
     queueMicrotask(() => {
-      if (savedDiagram && Array.isArray(savedDiagram.nodes) && Array.isArray(savedDiagram.edges) && Array.isArray(savedDiagram.groups)) {
-        const restored = savedDiagram as unknown as Diagram;
-        const restoredFlowchart = restored.source && detectDiagramType(restored.source)?.id === "flowchart"
-          ? parseMermaid(restored.source, restored)
-          : null;
-        setDiagram({
-          ...(restoredFlowchart ? { ...restoredFlowchart, source: restored.source } : restored),
-          style: { ...DEFAULT_DIAGRAM_STYLE, ...(restored.style || {}) },
-          polishedStyle: normalisePolishedStyle(restored.polishedStyle),
-        });
-      }
+      diagramRef.current = restored;
+      localDiagramIndexRef.current = index;
+      localDiagramCacheRef.current.set(index.activeId, clone(restored));
+      setDiagram(restored);
+      setSelected(restored.nodes[0] ? [restored.nodes[0].id] : []);
+      setLocalDiagramIndex(index);
+      setLocalStorageStatus(storageAvailable ? "saved" : "unavailable");
       if (savedPreferences) setPreferences({ ...DEFAULT_PREFERENCES, ...savedPreferences } as EditorPreferences);
       if (showWelcome) setWelcomeOpen(true);
       setStorageReady(true);
@@ -903,10 +1218,57 @@ export function MermaidEditor() {
   }, [typeMenuOpen]);
 
   useEffect(() => {
-    if (!storageReady) return;
-    const timer = window.setTimeout(() => writeStoredValue("mermade-diagram", JSON.stringify(diagram)), 180);
+    if (!localDiagramMenuOpen) return;
+    const closeOutside = (event: PointerEvent) => {
+      if (!localDiagramMenuRef.current?.contains(event.target as Node)) {
+        setLocalDiagramMenuOpen(false);
+        setPendingLocalDeleteId(null);
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setLocalDiagramMenuOpen(false);
+        setPendingLocalDeleteId(null);
+      }
+    };
+    window.addEventListener("pointerdown", closeOutside);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("pointerdown", closeOutside);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [localDiagramMenuOpen]);
+
+  useEffect(() => {
+    const activeId = localDiagramIndexRef.current.activeId;
+    if (!storageReady || !activeId) return;
+    localDiagramCacheRef.current.set(activeId, clone(diagram));
+    setLocalStorageStatus("saving");
+    const timer = window.setTimeout(() => persistLocalDiagram(activeId, diagram), 180);
     return () => window.clearTimeout(timer);
-  }, [diagram, storageReady]);
+  }, [diagram, persistLocalDiagram, storageReady]);
+
+  useEffect(() => {
+    if (!storageReady) return;
+    const flushLocalDiagram = () => {
+      const currentIndex = localDiagramIndexRef.current;
+      const id = currentIndex.activeId;
+      if (!id) return;
+      const previous = currentIndex.documents.find((document) => document.id === id);
+      const now = Date.now();
+      const summary: LocalDiagramSummary = {
+        id,
+        name: diagramRef.current.name.trim() || "Untitled diagram",
+        createdAt: previous?.createdAt ?? now,
+        updatedAt: now,
+      };
+      const nextIndex = updateLocalDiagramIndex(currentIndex, summary, id);
+      writeLocalDiagramDocument(localStorage, { version: 1, ...summary, diagram: diagramRef.current });
+      writeLocalDiagramIndex(localStorage, nextIndex);
+    };
+    window.addEventListener("pagehide", flushLocalDiagram);
+    return () => window.removeEventListener("pagehide", flushLocalDiagram);
+  }, [storageReady]);
 
   useEffect(() => {
     if (storageReady) {
@@ -1106,12 +1468,13 @@ export function MermaidEditor() {
   }, [activeDiagramType.id, activeMermaidVersion, currentLayoutCompatibilityError, diagramStyle.layout, renderProfileClass, restoreViewAnchor, source, viewMode]);
 
   useEffect(() => {
-    if (viewMode !== "polished" || !polishedSupported || !polishedViewRef.current) return;
+    if (viewMode !== "polished" || beautifulPreviewMode !== "diagram" || !polishedSupported || !polishedViewRef.current) return;
     const host = polishedViewRef.current;
     let cancelled = false;
 
     const renderDiagram = async () => {
       try {
+        const { renderPolishedSvg } = await loadBeautifulWorkspace();
         const svg = await renderPolishedSvg(source, polishedStyle);
         if (cancelled) return;
 
@@ -1119,7 +1482,8 @@ export function MermaidEditor() {
         const svgElement = host.querySelector("svg");
         if (svgElement) {
           decorateRenderedStatements(svgElement, source);
-          host.style.backgroundColor = svgElement.style.getPropertyValue("--bg").trim() || "transparent";
+          const previewBackground = svgElement.style.getPropertyValue("--bg").trim() || "#fffdfa";
+          host.style.backgroundColor = polishedStyle.transparent ? "transparent" : previewBackground;
         }
         const viewBox = svgElement?.viewBox.baseVal;
         const width = Math.max(480, Math.ceil(viewBox?.width || 1200));
@@ -1136,8 +1500,7 @@ export function MermaidEditor() {
           if (edge) element.dataset.edgeId = edge.id;
         });
         host.querySelectorAll<HTMLElement>("[data-node-id], [data-edge-id], [data-group-id], [data-source-line]").forEach((element) => {
-          const id = renderedSelectionId(element, diagramRef.current);
-          toggleRenderedSelection(element, Boolean(id && selectedRef.current.includes(id)));
+          toggleRenderedSelection(element, false);
         });
 
         setPolishedSize({ width, height });
@@ -1157,7 +1520,7 @@ export function MermaidEditor() {
         if (cancelled) return;
         host.replaceChildren();
         host.style.removeProperty("background-color");
-        setPolishedRenderError(error instanceof Error ? error.message : "Unable to render this diagram in Beautiful view");
+        setPolishedRenderError(error instanceof Error ? error.message : "Unable to render this diagram in the Beautiful workspace");
       }
     };
 
@@ -1166,7 +1529,42 @@ export function MermaidEditor() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [polishedStyle, polishedSupported, source, viewMode]);
+  }, [beautifulPreviewMode, polishedStyle, polishedSupported, source, viewMode]);
+
+  useEffect(() => {
+    if (viewMode !== "polished" || (beautifulPreviewMode !== "unicode" && beautifulPreviewMode !== "ascii")) return;
+    let cancelled = false;
+    const loadingFrame = requestAnimationFrame(() => {
+      if (!cancelled) setBeautifulTextLoading(true);
+    });
+    void renderTextDiagram(source, beautifulPreviewMode, 20_000, beautifulTextTheme).then((result) => {
+      if (cancelled) return;
+      setBeautifulTextError(result.error || "");
+      setBeautifulTextPreview(result.error ? "" : result.content);
+      setBeautifulTextHtml(result.error ? "" : (result.html || ""));
+      setBeautifulTextLayoutAdapted(Boolean(result.layoutAdapted));
+    }).finally(() => {
+      if (!cancelled) setBeautifulTextLoading(false);
+    });
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(loadingFrame);
+    };
+  }, [beautifulPreviewMode, beautifulTextTheme, source, viewMode]);
+
+  useLayoutEffect(() => {
+    if (viewMode !== "polished" || beautifulPreviewMode === "diagram" || beautifulTextLoading || beautifulTextError || !beautifulTextPreview) return;
+    const frame = requestAnimationFrame(() => {
+      const preview = beautifulTextPreRef.current;
+      if (!preview) return;
+      const next = {
+        width: Math.max(1, Math.ceil(preview.scrollWidth)),
+        height: Math.max(1, Math.ceil(preview.scrollHeight)),
+      };
+      setBeautifulTextSize((current) => current.width === next.width && current.height === next.height ? current : next);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [beautifulPreviewMode, beautifulTextError, beautifulTextLoading, beautifulTextPreview, beautifulTextHtml, viewMode]);
 
   useLayoutEffect(() => {
     if (!mermaidRenderRevision || viewMode !== "mermaid" || pendingViewAnchorRef.current?.targetView !== "mermaid") return;
@@ -1181,8 +1579,8 @@ export function MermaidEditor() {
   }, [polishedRenderRevision, restoreViewAnchor, viewMode]);
 
   useEffect(() => {
-    if (viewMode === "free") return;
-    const host = viewMode === "polished" ? polishedViewRef.current : mermaidViewRef.current;
+    if (viewMode !== "mermaid") return;
+    const host = mermaidViewRef.current;
     if (!host) return;
     host.querySelectorAll<HTMLElement>("[data-node-id], [data-edge-id], [data-group-id], [data-source-line]").forEach((element) => {
       const id = renderedSelectionId(element, diagramRef.current);
@@ -1495,6 +1893,25 @@ export function MermaidEditor() {
     });
   };
 
+  useEffect(() => {
+    if (viewMode !== "polished" || beautifulPreviewMode === "diagram") return;
+    if (beautifulTextLoading || beautifulTextError || !beautifulTextPreview) return;
+    let centreFrame = 0;
+    const zoomFrame = requestAnimationFrame(() => {
+      setZoom(1);
+      centreFrame = requestAnimationFrame(() => {
+        const scroller = scrollRef.current;
+        if (!scroller) return;
+        scroller.scrollLeft = Math.max(0, CANVAS_MARGIN + beautifulTextSize.width / 2 - scroller.clientWidth / 2);
+        scroller.scrollTop = Math.max(0, CANVAS_MARGIN + beautifulTextSize.height / 2 - scroller.clientHeight / 2);
+      });
+    });
+    return () => {
+      cancelAnimationFrame(zoomFrame);
+      cancelAnimationFrame(centreFrame);
+    };
+  }, [beautifulPreviewMode, beautifulTextError, beautifulTextLoading, beautifulTextPreview, beautifulTextSize, viewMode]);
+
   const editSelectedText = () => {
     if (selected.length !== 1) {
       notify("Select one node to edit its text");
@@ -1555,14 +1972,23 @@ export function MermaidEditor() {
       }
       if (editing || event.metaKey || event.ctrlKey || event.altKey || event.repeat) return;
 
+      if (key === "1" || key === "2" || key === "3") {
+        event.preventDefault();
+        if (key === "3") switchWorkspace("beautiful");
+        else switchCanvasView(key === "1" ? "free" : "mermaid");
+        return;
+      }
+
+      if (viewMode === "polished" && (key === "e" || ["n", "v", "l", "s", "d", "m"].includes(key)
+        || event.key === "Backspace" || event.key === "Delete")) {
+        event.preventDefault();
+        notify("Return to the Editor workspace to change diagram structure");
+        return;
+      }
+
       if (key === "e") {
         event.preventDefault();
         editSelectedText();
-        return;
-      }
-      if (key === "1" || key === "2" || key === "3") {
-        event.preventDefault();
-        switchCanvasView(key === "1" ? "free" : key === "2" ? "mermaid" : "polished");
         return;
       }
 
@@ -1809,6 +2235,7 @@ export function MermaidEditor() {
   const exportPolishedSvg = async () => {
     if (!polishedSupported) return;
     try {
+      const { renderPolishedSvg } = await loadBeautifulWorkspace();
       const svg = await renderPolishedSvg(source, polishedStyle);
       download(svg, `${diagram.name.toLowerCase().replace(/\W+/g, "-")}-beautiful.svg`, "image/svg+xml");
       setExportOpen(false);
@@ -1818,19 +2245,36 @@ export function MermaidEditor() {
     }
   };
 
-  const exportPolishedText = async () => {
+  const exportPolishedText = async (format: TextDiagramFormat = "unicode") => {
     if (!polishedSupported || unicodeExporting) return;
     setUnicodeExporting(true);
     try {
-      const result = await renderUnicodeDiagram(source);
-      download(`\uFEFF${result.content}`, `${diagram.name.toLowerCase().replace(/\W+/g, "-")}.txt`, "text/plain;charset=utf-8");
+      const result = await renderTextDiagram(source, format);
+      if (result.error) throw new Error(result.error);
+      download(`\uFEFF${result.content}`, `${diagram.name.toLowerCase().replace(/\W+/g, "-")}-${format}.txt`, "text/plain;charset=utf-8");
       setExportOpen(false);
-      notify(result.simplified ? "Large diagram exported as a Unicode relationship map" : "Unicode diagram exported");
+      notify(result.layoutAdapted ? `${format.toUpperCase()} diagram exported with a wide text layout` : `${format.toUpperCase()} diagram exported`);
     } catch (error) {
-      notify(error instanceof Error ? `Unicode export failed: ${error.message}` : "Unicode export failed");
+      notify(error instanceof Error ? `${format.toUpperCase()} export failed: ${error.message}` : `${format.toUpperCase()} export failed`);
     } finally {
       setUnicodeExporting(false);
     }
+  };
+
+  const copyBeautifulPreview = async () => {
+    if (!beautifulTextPreview || beautifulTextError) return;
+    try {
+      await navigator.clipboard.writeText(beautifulTextPreview);
+      notify(`${beautifulPreviewMode.toUpperCase()} copied`);
+    } catch {
+      notify("The browser could not copy this text preview");
+    }
+  };
+
+  const downloadBeautifulPreview = () => {
+    if (!beautifulTextPreview || beautifulTextError) return;
+    download(`\uFEFF${beautifulTextPreview}`, `${diagram.name.toLowerCase().replace(/\W+/g, "-")}-${beautifulPreviewMode}.txt`, "text/plain;charset=utf-8");
+    notify(`${beautifulPreviewMode.toUpperCase()} downloaded`);
   };
 
   async function validateSource(candidate: string, version: SupportedMermaidVersion) {
@@ -1896,7 +2340,10 @@ export function MermaidEditor() {
       setSelected([]);
       setInvalidSource("");
       setSyntaxError("");
-      if (viewMode === "polished" && !supportsPolishedDiagram(detectedType.id)) setViewMode("mermaid");
+      if (viewMode === "polished" && !supportsPolishedDiagram(detectedType.id)) {
+        lastEditorViewRef.current = "mermaid";
+        setViewMode("mermaid");
+      }
       return { ok: true };
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : "Mermaid rejected this source" };
@@ -1974,6 +2421,17 @@ export function MermaidEditor() {
       .some((key) => key in patch);
   };
 
+  const updatePolishedColour = (role: keyof PolishedCustomColours, value: string) => {
+    updatePolishedStyle({
+      paletteMode: "custom",
+      customColours: { ...polishedStyle.customColours, [role]: value },
+    });
+  };
+
+  const activeBeautifulDensity = BEAUTIFUL_DENSITY_PRESETS.find(({ values }) =>
+    Object.entries(values).every(([key, value]) => polishedStyle[key as keyof PolishedStyle] === value),
+  )?.id;
+
   const openRepairOptions = async () => {
     const candidate = invalidSource || source;
     setRepairOpen(true);
@@ -2046,6 +2504,7 @@ export function MermaidEditor() {
       setSourceOpen(false);
       setExportOpen(false);
       setViewMode("mermaid");
+      lastEditorViewRef.current = "mermaid";
       notify(imported.additionalDiagramCount
         ? `Imported ${file.name}; using the first Mermaid diagram`
         : `Imported ${file.name}`);
@@ -2057,6 +2516,7 @@ export function MermaidEditor() {
   const changeDiagramType = async (nextTypeId: string) => {
     const nextType = MERMAID_DIAGRAM_TYPES.find((type) => type.id === nextTypeId);
     if (!nextType || nextType.id === activeDiagramType.id) return;
+    const remainInBeautiful = viewMode === "polished" && supportsPolishedDiagram(nextType.id);
 
     const result = await validateAndCommitSource(nextType.template);
     if (!result.ok) {
@@ -2065,7 +2525,8 @@ export function MermaidEditor() {
     }
     setSourceDraft(nextType.template);
     setSourceDirty(false);
-    setViewMode("mermaid");
+    setViewMode(remainInBeautiful ? "polished" : "mermaid");
+    if (!remainInBeautiful) lastEditorViewRef.current = "mermaid";
     notify(`${nextType.label} starter created`);
   };
 
@@ -2134,8 +2595,20 @@ export function MermaidEditor() {
     if (targetView === "mermaid") shouldFitMermaidRef.current = false;
     if (targetView === "polished") shouldFitPolishedRef.current = false;
     if (targetView === "free") shouldFitFreeformRef.current = false;
+    if (targetView !== "polished") lastEditorViewRef.current = targetView;
+    if (targetView === "polished") {
+      setTool("select");
+      setConnectionStart(null);
+      setEditingNode(null);
+      setEditingGroup(null);
+      setEditingSourceLine(null);
+    }
     setViewMode(targetView);
   }
+
+  const switchWorkspace = (workspace: "editor" | "beautiful") => {
+    switchCanvasView(workspace === "beautiful" ? "polished" : lastEditorViewRef.current);
+  };
 
   const zoomAtViewportCenter = (nextValue: number) => {
     const scroller = scrollRef.current;
@@ -2154,15 +2627,101 @@ export function MermaidEditor() {
   };
 
   return (
-    <main className="app-shell">
+    <main className={`app-shell ${viewMode === "polished" ? "beautiful-app-shell" : ""}`} style={viewMode === "polished" ? beautifulWorkspaceStyle : undefined}>
       <header className="topbar">
         <div className="brand-lockup">
           <span className="brand-mark" style={{ backgroundImage: `url(${PUBLIC_BASE_PATH}/brand/logo-mark.svg)` }} aria-hidden="true" />
           <div className="brand-name">mermade</div>
           <div className="top-divider" />
-          <input className="document-name" aria-label="Diagram name" value={diagram.name} onFocus={checkpoint} onChange={(event) => setDiagram((current) => ({ ...current, name: event.target.value }))} />
-          <span className="save-status"><Check size={13} /> Saved locally</span>
+          <input ref={documentNameRef} className="document-name" aria-label="Diagram name" value={diagram.name} onFocus={checkpoint} onChange={(event) => setDiagram((current) => ({ ...current, name: event.target.value }))} />
+          <div className="local-diagram-switcher" ref={localDiagramMenuRef}>
+            <button
+              className={`save-status ${localStorageStatus}`}
+              type="button"
+              aria-label={`Local diagrams: ${localStorageStatusLabel}`}
+              aria-expanded={localDiagramMenuOpen}
+              aria-haspopup="dialog"
+              onClick={() => {
+                setExportOpen(false);
+                setTypeMenuOpen(false);
+                setPendingLocalDeleteId(null);
+                setLocalDiagramSearch("");
+                setLocalDiagramMenuOpen((open) => !open);
+              }}
+            >
+              {localStorageStatus === "saving"
+                ? <LoaderCircle className="save-status-spinner" size={13} />
+                : localStorageStatus === "unavailable"
+                  ? <AlertTriangle size={13} />
+                  : <Check size={13} />}
+              <span>{localStorageStatusLabel}</span>
+              <ChevronDown size={12} />
+            </button>
+            {localDiagramMenuOpen && (
+              <div className="local-diagram-menu" role="dialog" aria-label="Local diagrams">
+                <header>
+                  <span><b>Local diagrams</b><small>Stored in this browser</small></span>
+                  <button type="button" onClick={createLocalDiagram}><Plus size={15} /> New</button>
+                </header>
+                <label className="local-diagram-search">
+                  <Search size={14} />
+                  <input
+                    autoFocus
+                    type="search"
+                    aria-label="Search local diagrams"
+                    placeholder="Search diagrams"
+                    value={localDiagramSearch}
+                    onChange={(event) => setLocalDiagramSearch(event.target.value)}
+                  />
+                </label>
+                <div className="local-diagram-list" role="listbox" aria-label="Saved diagrams">
+                  {filteredLocalDiagrams.map((document) => (
+                    <button
+                      key={document.id}
+                      type="button"
+                      role="option"
+                      aria-selected={document.id === localDiagramIndex.activeId}
+                      className={document.id === localDiagramIndex.activeId ? "selected" : ""}
+                      onClick={() => activateLocalDiagram(document.id)}
+                    >
+                      <span><b>{document.name}</b><small>Edited {formatLocalDiagramDate(document.updatedAt)}</small></span>
+                      {document.id === localDiagramIndex.activeId && <Check size={15} />}
+                    </button>
+                  ))}
+                  {!filteredLocalDiagrams.length && <p>No local diagrams match that search.</p>}
+                </div>
+                {activeLocalDiagram && (
+                  <footer className="local-diagram-actions">
+                    <button type="button" onClick={renameLocalDiagram}><Pencil size={14} /> Rename</button>
+                    <button type="button" onClick={duplicateLocalDiagram}><Copy size={14} /> Duplicate</button>
+                    <button className="danger" type="button" onClick={() => setPendingLocalDeleteId(activeLocalDiagram.id)}><Trash2 size={14} /> Delete</button>
+                  </footer>
+                )}
+                {pendingLocalDeleteId && (
+                  <div className="local-diagram-confirm" role="alertdialog" aria-label="Delete local diagram">
+                    <span><b>Delete this diagram?</b><small>This cannot be undone.</small></span>
+                    <div>
+                      <button type="button" onClick={() => setPendingLocalDeleteId(null)}>Cancel</button>
+                      <button className="danger" type="button" onClick={() => deleteLocalDiagram(pendingLocalDeleteId)}>Delete</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
+        <nav className="workspace-switcher" aria-label="Workspace">
+          <button type="button" className={viewMode !== "polished" ? "active" : ""} aria-pressed={viewMode !== "polished"} onClick={() => switchWorkspace("editor")}><MousePointer2 size={13} /> Editor</button>
+          <button
+            type="button"
+            className={viewMode === "polished" ? "active beautiful" : "beautiful"}
+            aria-pressed={viewMode === "polished"}
+            aria-keyshortcuts="3"
+            disabled={!polishedSupported}
+            title={polishedSupported ? "Beautiful workspace (3)" : `Beautiful Mermaid does not yet support ${activeDiagramType.label}`}
+            onClick={() => switchWorkspace("beautiful")}
+          ><BeautifulMermaidMark size={14} /> Beautiful</button>
+        </nav>
         <div className="top-actions" data-tour="file-actions">
           <div className="history-actions">
             <IconButton label="Undo" onClick={undo}><Undo2 size={17} /></IconButton>
@@ -2179,15 +2738,32 @@ export function MermaidEditor() {
                 <button type="button" onClick={() => { download(source, `${diagram.name}.mmd`, "text/plain"); setExportOpen(false); }}><Code2 size={16} /><span><b>Mermaid file</b><small>Download .mmd source</small></span></button>
                 <button type="button" onClick={exportSvg}><ExternalLink size={16} /><span><b>Mermaid vector</b><small>Download Mermaid SVG</small></span></button>
                 {polishedSupported && <button type="button" onClick={exportPolishedSvg}><BeautifulMermaidMark size={16} /><span><b>Beautiful vector</b><small>Download Beautiful Mermaid SVG</small></span></button>}
-                {polishedSupported && <button type="button" disabled={unicodeExporting} onClick={exportPolishedText}><Code2 size={16} /><span><b>{unicodeExporting ? "Preparing Unicode…" : "Unicode diagram"}</b><small>{unicodeExporting ? "Rendering away from the canvas" : "Download a text rendering"}</small></span></button>}
+                {polishedSupported && <button type="button" disabled={unicodeExporting} onClick={() => void exportPolishedText("unicode")}><Code2 size={16} /><span><b>{unicodeExporting ? "Preparing text…" : "Unicode diagram"}</b><small>{unicodeExporting ? "Rendering away from the canvas" : "Download box-drawing text"}</small></span></button>}
+                {polishedSupported && <button type="button" disabled={unicodeExporting} onClick={() => void exportPolishedText("ascii")}><Code2 size={16} /><span><b>ASCII diagram</b><small>Download plain terminal text</small></span></button>}
               </div>
             )}
           </div>
         </div>
       </header>
 
-      <section className="workspace">
-        <aside className={`tool-rail ${preferences.showShortcutHints ? "" : "hide-shortcuts"}`} aria-label="Canvas tools" data-tour="canvas-tools">
+      <section className={`workspace ${viewMode === "polished" ? "beautiful-workspace" : "editor-workspace"}`}>
+        {viewMode === "polished" ? <aside className={`tool-rail beautiful-tool-rail ${preferences.showShortcutHints ? "" : "hide-shortcuts"}`} aria-label="Beautiful workspace tools">
+          <div className="tool-group">
+            <IconButton label="Fit chart (F)" shortcut="F" onClick={fitView}><Minimize2 size={19} /></IconButton>
+            <IconButton label="Fill chart (Shift+F)" shortcut="⇧F" onClick={fillView}><Maximize2 size={19} /></IconButton>
+          </div>
+          <div className="tool-separator" />
+          <div className="tool-group">
+            <IconButton label="Edit Mermaid source" onClick={() => openSourceEditor()}><Code2 size={19} /></IconButton>
+            <IconButton label="Export Beautiful SVG" onClick={() => void exportPolishedSvg()}><Download size={19} /></IconButton>
+          </div>
+          <div className="rail-spacer" />
+          <div className="rail-help-stack">
+            <IconButton label={`${activeDiagramType.label} help`} active={helpOpen} onClick={() => { setHelpOpen((open) => !open); setShortcutsOpen(false); setSettingsOpen(false); }}><CircleHelp size={19} /></IconButton>
+            <IconButton label="Keyboard shortcuts" active={shortcutsOpen} onClick={() => { setShortcutsOpen((open) => !open); setSettingsOpen(false); setHelpOpen(false); }}><Command size={19} /></IconButton>
+            <IconButton label="Settings" active={settingsOpen} onClick={() => { setSettingsOpen(true); setShortcutsOpen(false); setHelpOpen(false); }}><Settings2 size={19} /></IconButton>
+          </div>
+        </aside> : <aside className={`tool-rail ${preferences.showShortcutHints ? "" : "hide-shortcuts"}`} aria-label="Canvas tools" data-tour="canvas-tools">
           <div className="tool-group">
             <IconButton label="Select (V)" shortcut="V" disabled={!nativeFlowchart} active={nativeFlowchart && tool === "select"} onClick={() => { setTool("select"); setConnectionStart(null); }}><MousePointer2 size={19} /></IconButton>
             <IconButton label="Marquee select (M)" shortcut="M" disabled={!nativeFlowchart} active={nativeFlowchart && tool === "marquee"} onClick={() => { setTool("marquee"); setConnectionStart(null); }}><BoxSelect size={19} /></IconButton>
@@ -2208,7 +2784,7 @@ export function MermaidEditor() {
             <IconButton label="Keyboard shortcuts" active={shortcutsOpen} onClick={() => { setShortcutsOpen((open) => !open); setSettingsOpen(false); setHelpOpen(false); }}><Command size={19} /></IconButton>
             <IconButton label="Settings" active={settingsOpen} onClick={() => { setSettingsOpen(true); setShortcutsOpen(false); setHelpOpen(false); }}><Settings2 size={19} /></IconButton>
           </div>
-        </aside>
+        </aside>}
 
         <section className={`canvas-viewport ${tool === "connect" ? "is-connecting" : ""} ${tool === "marquee" ? "is-marquee" : ""}`}>
           <div className="canvas-titlebar">
@@ -2239,7 +2815,33 @@ export function MermaidEditor() {
                 </div>)}
               </div>}
             </div>
-            <div className="canvas-view-controls" data-tour="canvas-views" onPointerDown={(event) => event.stopPropagation()}>
+            {viewMode === "polished" ? <div className="beautiful-preview-controls" onPointerDown={(event) => event.stopPropagation()}>
+              <div className="beautiful-output-switch" role="tablist" aria-label="Beautiful output preview">
+                {([["diagram", "Diagram"], ["unicode", "Unicode"], ["ascii", "ASCII"]] as Array<[BeautifulPreviewMode, string]>).map(([mode, label]) => <button
+                  key={mode}
+                  type="button"
+                  role="tab"
+                  aria-selected={beautifulPreviewMode === mode}
+                  className={beautifulPreviewMode === mode ? "active" : ""}
+                  onClick={() => {
+                    setBeautifulPreviewMode(mode);
+                    if (mode === "unicode" || mode === "ascii") {
+                      setBeautifulTextSize({ width: 240, height: 120 });
+                      setBeautifulTextLoading(true);
+                      setBeautifulTextPreview("");
+                      setBeautifulTextHtml("");
+                      setBeautifulTextError("");
+                      setBeautifulTextLayoutAdapted(false);
+                    }
+                  }}
+                >{label}</button>)}
+              </div>
+              {beautifulPreviewMode !== "diagram" && <div className="beautiful-text-actions">
+                {beautifulTextLayoutAdapted && <span>Wide text layout</span>}
+                <button type="button" aria-label={`Copy ${beautifulPreviewMode.toUpperCase()} diagram`} disabled={beautifulTextLoading || Boolean(beautifulTextError) || !beautifulTextPreview} onClick={() => void copyBeautifulPreview()}><Copy size={14} /></button>
+                <button type="button" aria-label={`Download ${beautifulPreviewMode.toUpperCase()} diagram`} disabled={beautifulTextLoading || Boolean(beautifulTextError) || !beautifulTextPreview} onClick={downloadBeautifulPreview}><Download size={14} /></button>
+              </div>}
+            </div> : <div className="canvas-view-controls" data-tour="canvas-views" onPointerDown={(event) => event.stopPropagation()}>
               {nativeFlowchart && <div className="direction-switch" aria-label="Chart direction">
                 <button className={diagram.direction === "LR" ? "active" : ""} type="button" onClick={(event) => { event.stopPropagation(); changeFlowchartDirection("LR"); }}>Left → right</button>
                 <button className={diagram.direction === "TB" ? "active" : ""} type="button" onClick={(event) => { event.stopPropagation(); changeFlowchartDirection("TB"); }}>Top ↓ bottom</button>
@@ -2247,24 +2849,15 @@ export function MermaidEditor() {
               <div className="view-switch" aria-label="Canvas view">
                 <button className={viewMode === "free" ? "active" : ""} type="button" aria-keyshortcuts="1" title={`${visualModeName} canvas (1)`} onClick={(event) => { event.stopPropagation(); switchCanvasView("free"); }}><MousePointer2 size={12} /> {visualModeName}</button>
                 <button className={viewMode === "mermaid" ? "active" : ""} type="button" aria-keyshortcuts="2" title="Mermaid canvas (2)" onClick={(event) => { event.stopPropagation(); switchCanvasView("mermaid"); }}><Sparkles size={12} /> Mermaid</button>
-                <button
-                  className={viewMode === "polished" ? "active" : ""}
-                  type="button"
-                  disabled={!polishedSupported}
-                  aria-keyshortcuts="3"
-                  aria-label={polishedSupported ? "Beautiful canvas" : `Beautiful canvas is not available for ${activeDiagramType.label}`}
-                  title={polishedSupported ? "Beautiful canvas (3) · Presentation rendering by Beautiful Mermaid" : `Beautiful Mermaid does not yet support ${activeDiagramType.label}`}
-                  onClick={(event) => { event.stopPropagation(); switchCanvasView("polished"); }}
-                ><BeautifulMermaidMark size={12} /> Beautiful</button>
               </div>
-            </div>
+            </div>}
           </div>
           {viewMode === "free" && !nativeFlowchart ? (
             <SemanticVisualEditor key={`${activeDiagramType.id}:${source}`} source={source} type={activeDiagramType} onCommit={validateAndCommitSource} />
           ) : <div ref={scrollRef} className="canvas-scroll">
             <div
-              className={`diagram-surface ${preferences.showGrid ? "" : "hide-grid"}`}
-              onPointerDown={beginCanvasPointer}
+              className={`diagram-surface ${preferences.showGrid && viewMode !== "polished" ? "" : "hide-grid"} ${viewMode === "polished" ? `beautiful-surface ${polishedStyle.transparent ? "is-transparent" : "is-opaque"}` : ""}`}
+              onPointerDown={viewMode === "polished" ? undefined : beginCanvasPointer}
               style={{
                 width: ((viewMode === "free" ? BOARD_WIDTH : renderedSize.width) + CANVAS_MARGIN * 2) * zoom,
                 height: ((viewMode === "free" ? BOARD_HEIGHT : renderedSize.height) + CANVAS_MARGIN * 2) * zoom,
@@ -2348,13 +2941,24 @@ export function MermaidEditor() {
                   height: renderedSize.height,
                   transform: `scale(${zoom})`,
                 }}
-                onPointerDown={selectMermaidElement}
-                onDoubleClick={editMermaidElement}
+                onPointerDown={viewMode === "polished" ? undefined : selectMermaidElement}
+                onDoubleClick={viewMode === "polished" ? undefined : editMermaidElement}
               >
                 {viewMode === "polished"
-                  ? <div ref={polishedViewRef} className="mermaid-render polished-render" />
-                  : <div ref={mermaidViewRef} className={`mermaid-render ${renderProfileClass}`} />}
-                {marquee && (
+                  ? beautifulPreviewMode === "diagram"
+                    ? <div key="beautiful-render" ref={polishedViewRef} className="mermaid-render polished-render" />
+                    : <div className="beautiful-text-preview" role="tabpanel" aria-label={`${beautifulPreviewMode.toUpperCase()} text preview`}>
+                      {beautifulTextLoading
+                        ? <div className="beautiful-text-loading"><Sparkles size={17} /> Rendering {beautifulPreviewMode.toUpperCase()}…</div>
+                        : beautifulTextError
+                          ? <div className="beautiful-text-error"><AlertTriangle size={18} /><b>Text diagram could not be rendered</b><span>{beautifulTextError}</span></div>
+                        : <pre ref={beautifulTextPreRef}>{beautifulTextHtml
+                          ? <code dangerouslySetInnerHTML={{ __html: beautifulTextHtml }} />
+                          : <code>{beautifulTextPreview}</code>}
+                        </pre>}
+                    </div>
+                  : <div key="mermaid-render" ref={mermaidViewRef} className={`mermaid-render ${renderProfileClass}`} />}
+                {viewMode !== "polished" && marquee && (
                   <div
                     className="marquee-selection"
                     style={{
@@ -2366,14 +2970,14 @@ export function MermaidEditor() {
                   />
                 )}
                 {viewMode === "mermaid" && mermaidRenderError && <div className="mermaid-render-error"><Code2 size={20} /><b>Mermaid could not render this diagram</b><span>{mermaidRenderError}</span></div>}
-                {viewMode === "polished" && polishedRenderError && <div className="mermaid-render-error"><BeautifulMermaidMark size={20} /><b>Beautiful view could not render this valid Mermaid diagram</b><span>{polishedRenderError}</span></div>}
-                {viewMode === "polished" && !polishedRenderError && <div className="polished-credit"><BeautifulMermaidMark size={12} /> Beautiful Mermaid renderer</div>}
+                {viewMode === "polished" && beautifulPreviewMode === "diagram" && polishedRenderError && <div className="mermaid-render-error"><BeautifulMermaidMark size={20} /><b>Beautiful could not present this valid Mermaid diagram</b><span>{polishedRenderError}</span></div>}
+                {viewMode === "polished" && beautifulPreviewMode === "diagram" && !polishedRenderError && <div className="polished-credit"><BeautifulMermaidMark size={12} /> Beautiful Mermaid renderer</div>}
               </div>
             )}
             </div>
           </div>}
 
-          {viewMode !== "free" && editingNode && selectedNode && (
+          {viewMode === "mermaid" && editingNode && selectedNode && (
             <div className="mermaid-inline-editor">
               <span>Edit node text</span>
               <input
@@ -2387,7 +2991,7 @@ export function MermaidEditor() {
             </div>
           )}
 
-          {viewMode !== "free" && editingGroup && selectedGroup && (
+          {viewMode === "mermaid" && editingGroup && selectedGroup && (
             <div className="mermaid-inline-editor">
               <span>Edit subgraph text</span>
               <input
@@ -2401,7 +3005,7 @@ export function MermaidEditor() {
             </div>
           )}
 
-          {viewMode !== "free" && editingSourceLine !== null && (
+          {viewMode === "mermaid" && editingSourceLine !== null && (
             <form className="mermaid-inline-editor mermaid-statement-editor" onSubmit={(event) => { event.preventDefault(); void applyRenderedStatementEdit(); }}>
               <span>Mermaid statement · line {editingSourceLine + 1}</span>
               <input
@@ -2415,7 +3019,7 @@ export function MermaidEditor() {
             </form>
           )}
 
-          {(viewMode !== "free" || nativeFlowchart) && <><div className="canvas-hint"><BoxSelect size={15} /> Click to select · Double-click {nativeFlowchart ? "to edit" : "diagram text to edit its Mermaid statement"} · Scroll to pan · ⌘ scroll to zoom</div>
+          {(viewMode !== "free" || nativeFlowchart) && <><div className={`canvas-hint ${viewMode === "polished" ? "beautiful-canvas-hint" : ""}`}>{viewMode === "polished" ? <><BeautifulMermaidMark size={14} /> Presentation workspace · Edit structure in Editor or Source · Scroll to pan · ⌘ scroll to zoom</> : <><BoxSelect size={15} /> Click to select · Double-click {nativeFlowchart ? "to edit" : "diagram text to edit its Mermaid statement"} · Scroll to pan · ⌘ scroll to zoom</>}</div>
           <div className="zoom-controls" data-tour="canvas-navigation">
             <IconButton label="Zoom out" onClick={() => zoomAtViewportCenter(zoom - 0.1)}><ZoomOut size={17} /></IconButton>
             <button type="button" onClick={fitView}>{Math.round(zoom * 100)}%</button>
@@ -2427,7 +3031,65 @@ export function MermaidEditor() {
           {nativeFlowchart && tool === "marquee" && <div className="mode-banner"><BoxSelect size={15} /> Drag across nodes · Shift-drag to add</div>}
         </section>
 
-        <aside className="inspector" data-tour="inspector">
+        <aside className={`inspector ${viewMode === "polished" ? "beautiful-inspector" : ""}`} data-tour="inspector">
+          {viewMode === "polished" ? <>
+            <header className="beautiful-inspector-header">
+              <div><span className="beautiful-inspector-mark"><BeautifulMermaidMark size={19} /></span><span><b>Beautiful workspace</b><small>Presentation renderer</small></span></div>
+              <button type="button" onClick={() => switchWorkspace("editor")}><MousePointer2 size={13} /> Editor</button>
+            </header>
+            <div className="beautiful-inspector-body">
+              <section className="beautiful-control-section palette-section">
+                <header><span><Palette size={14} /> Palette</span><small>Two-colour mono or enriched themes</small></header>
+                <div className="beautiful-segmented" aria-label="Beautiful palette source">
+                  <button type="button" className={polishedStyle.paletteMode === "theme" ? "active" : ""} onClick={() => updatePolishedStyle({ paletteMode: "theme" })}>Themes</button>
+                  <button type="button" className={polishedStyle.paletteMode === "custom" ? "active" : ""} onClick={() => updatePolishedStyle({ paletteMode: "custom" })}>Custom</button>
+                </div>
+                {polishedStyle.paletteMode === "theme" ? <div className="beautiful-theme-grid">
+                  {POLISHED_THEME_OPTIONS.map(([value, label]) => {
+                    const preview = POLISHED_THEME_PREVIEWS[value];
+                    return <button key={value} type="button" className={polishedStyle.theme === value ? "selected" : ""} onClick={() => updatePolishedStyle({ theme: value, paletteMode: "theme" })}>
+                      <span className="beautiful-theme-preview" style={{ "--theme-bg": preview.bg, "--theme-fg": preview.fg, "--theme-accent": preview.accent } as React.CSSProperties}><i /><i /><i /></span>
+                      <b>{label.replace(/^Mermade — /, "Mermade · ")}</b>
+                      {polishedStyle.theme === value && <Check size={12} />}
+                    </button>;
+                  })}
+                </div> : <div className="beautiful-colour-grid">
+                  {BEAUTIFUL_COLOUR_ROLES.map(([role, label]) => <label key={role}><span>{label}</span><div><input type="color" value={polishedStyle.customColours[role]} aria-label={`${label} colour`} onChange={(event) => updatePolishedColour(role, event.target.value)} /><input value={polishedStyle.customColours[role]} onChange={(event) => updatePolishedColour(role, event.target.value)} /></div></label>)}
+                </div>}
+              </section>
+
+              <section className="beautiful-control-section layout-section">
+                <header><span><SlidersHorizontal size={14} /> Layout density</span><small>Beautiful Mermaid&apos;s ELK spacing</small></header>
+                <div className="beautiful-density-grid">
+                  {BEAUTIFUL_DENSITY_PRESETS.map((preset) => <button key={preset.id} type="button" className={activeBeautifulDensity === preset.id ? "selected" : ""} onClick={() => updatePolishedStyle(preset.values)}><b>{preset.label}</b><small>{preset.description}</small></button>)}
+                </div>
+                <div className="beautiful-range-list">
+                  {([
+                    ["padding", "Canvas padding", 8, 160],
+                    ["nodeSpacing", "Node spacing", 8, 160],
+                    ["layerSpacing", "Layer spacing", 8, 200],
+                    ["componentSpacing", "Component spacing", 8, 200],
+                  ] as Array<["padding" | "nodeSpacing" | "layerSpacing" | "componentSpacing", string, number, number]>).map(([key, label, min, max]) => <label key={key}><span>{label}<output>{polishedStyle[key]} px</output></span><input type="range" min={min} max={max} step="2" value={polishedStyle[key]} onChange={(event) => updatePolishedStyle({ [key]: Number(event.target.value) })} /></label>)}
+                </div>
+              </section>
+
+              <section className="beautiful-control-section output-section">
+                <header><span><Sparkles size={14} /> Rendering</span><small>Preview-only choices; source stays unchanged</small></header>
+                <label className="beautiful-control-row"><span><b>Source colour overrides</b><small>Let Mermaid style directives override this palette</small></span><input type="checkbox" checked={polishedStyle.respectSourceStyles} onChange={(event) => updatePolishedStyle({ respectSourceStyles: event.target.checked })} /></label>
+                <label className="beautiful-control-row"><span><b>Transparent export</b><small>Keep the SVG background transparent</small></span><input type="checkbox" checked={polishedStyle.transparent} onChange={(event) => updatePolishedStyle({ transparent: event.target.checked })} /></label>
+                {activeDiagramType.id === "xychart" && <label className="beautiful-control-row"><span><b>Interactive data tips</b><small>Show values while hovering</small></span><input type="checkbox" checked={polishedStyle.interactive} onChange={(event) => updatePolishedStyle({ interactive: event.target.checked })} /></label>}
+                <label className="beautiful-font-field"><span>Font family</span><input value={polishedStyle.font} onChange={(event) => updatePolishedStyle({ font: event.target.value })} /></label>
+              </section>
+
+              <section className="beautiful-control-section beautiful-actions-section">
+                <button className="primary-button" type="button" onClick={() => void exportPolishedSvg()}><Download size={15} /> Export Beautiful SVG</button>
+                <button className="secondary-button" type="button" disabled={unicodeExporting} onClick={() => void exportPolishedText("unicode")}><Code2 size={15} /> {unicodeExporting ? "Preparing text…" : "Export Unicode"}</button>
+                <button className="secondary-button" type="button" disabled={unicodeExporting} onClick={() => void exportPolishedText("ascii")}><Code2 size={15} /> Export ASCII</button>
+                <button className="beautiful-reset" type="button" onClick={() => updatePolishedStyle(DEFAULT_POLISHED_STYLE)}><RotateCcw size={13} /> Reset Beautiful settings</button>
+              </section>
+            </div>
+            <footer className="beautiful-inspector-footer"><BeautifulMermaidMark size={13} /><span>{activeDiagramType.label} rendered from canonical Mermaid</span><span className="status-dot" /></footer>
+          </> : <>
           <div className="inspector-tabs">
             <button type="button" className={tab === "properties" ? "active" : ""} onClick={() => setTab("properties")}>Properties</button>
             <button type="button" className={tab === "appearance" ? "active" : ""} onClick={() => setTab("appearance")}>Appearance</button>
@@ -2437,24 +3099,6 @@ export function MermaidEditor() {
             {tab === "style" ? (
               <div className="diagram-style-panel">
                 <div className="field-stack">
-                  {viewMode === "polished" ? <>
-                    <p className="style-compatibility-note polished-style-note">Beautiful view uses Beautiful Mermaid&apos;s native derived palette and specialist renderers. These settings never alter the canonical source.</p>
-                    <label><span>Beautiful theme</span><select value={polishedStyle.theme} onChange={(event) => updatePolishedStyle({ theme: event.target.value as PolishedTheme })}>
-                      {POLISHED_THEME_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-                    </select></label>
-                    <label><span>Source styling</span><select value={polishedStyle.respectSourceStyles ? "source" : "polished"} onChange={(event) => updatePolishedStyle({ respectSourceStyles: event.target.value === "source" })}>
-                      <option value="source">Source styles + theme</option>
-                      <option value="polished">Theme only</option>
-                    </select></label>
-                    <label><span>Font family</span><input value={polishedStyle.font} onChange={(event) => updatePolishedStyle({ font: event.target.value })} /></label>
-                    <label><span>Canvas padding</span><input type="number" min="8" max="160" value={polishedStyle.padding} onChange={(event) => updatePolishedStyle({ padding: Number(event.target.value) })} /></label>
-                    <label><span>Node spacing</span><input type="number" min="8" max="160" value={polishedStyle.nodeSpacing} onChange={(event) => updatePolishedStyle({ nodeSpacing: Number(event.target.value) })} /></label>
-                    <label><span>Layer spacing</span><input type="number" min="8" max="200" value={polishedStyle.layerSpacing} onChange={(event) => updatePolishedStyle({ layerSpacing: Number(event.target.value) })} /></label>
-                    <label><span>Component spacing</span><input type="number" min="8" max="200" value={polishedStyle.componentSpacing} onChange={(event) => updatePolishedStyle({ componentSpacing: Number(event.target.value) })} /></label>
-                    <label className="toggle-row"><span>Transparent background</span><input type="checkbox" checked={polishedStyle.transparent} onChange={(event) => updatePolishedStyle({ transparent: event.target.checked })} /></label>
-                    {activeDiagramType.id === "xychart" && <label className="toggle-row"><span>Interactive data tips</span><input type="checkbox" checked={polishedStyle.interactive} onChange={(event) => updatePolishedStyle({ interactive: event.target.checked })} /></label>}
-                    <button className="wide-action" type="button" onClick={() => updatePolishedStyle(DEFAULT_POLISHED_STYLE)}><RotateCcw size={15} /> Reset Beautiful style</button>
-                  </> : <>
                   <label><span>Theme</span><select value={diagramStyle.theme} onChange={(event) => updateDiagramStyle({ theme: event.target.value as MermaidTheme })}>
                     {(modernStyleFeatures ? MODERN_THEME_OPTIONS : LEGACY_THEME_OPTIONS).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                     {!modernStyleFeatures && !LEGACY_THEME_OPTIONS.some(({ value }) => value === diagramStyle.theme) && <option value={diagramStyle.theme} disabled>{diagramStyle.theme} — Mermaid 11 only</option>}
@@ -2472,7 +3116,6 @@ export function MermaidEditor() {
                     ] as Array<[keyof DiagramStyle, string]>).map(([key, label]) => <label key={key}><span>{label}</span><div className="color-input"><input type="color" value={diagramStyle[key]} onChange={(event) => updateDiagramStyle({ [key]: event.target.value })} /><input value={diagramStyle[key]} onChange={(event) => updateDiagramStyle({ [key]: event.target.value })} /></div></label>)}
                   </div> : <p className="style-palette-note">This preset owns its palette. Choose <b>Base</b> to customise diagram colours.</p>}
                   <button className="wide-action" type="button" onClick={() => updateDiagramStyle(DEFAULT_DIAGRAM_STYLE)}><RotateCcw size={15} /> Reset diagram style</button>
-                  </>}
                 </div>
               </div>
             ) : selectedSourceStatement !== undefined ? (
@@ -2547,6 +3190,7 @@ export function MermaidEditor() {
           <footer className={`inspector-footer ${diagramError ? "invalid" : ""}`}>
             {diagramError ? <button type="button" onClick={() => void openRepairOptions()} title={diagramError}><AlertTriangle size={14} /><span>Repair Mermaid {statusDiagramType.label}</span><span className="status-dot" /></button> : <><Sparkles size={14} /><span>Valid Mermaid {activeDiagramType.label}</span><span className="status-dot" /></>}
           </footer>
+          </>}
         </aside>
       </section>
 
@@ -2685,7 +3329,7 @@ export function MermaidEditor() {
                 <div className="shortcuts-list">
                   <div><b>FreeForm canvas</b><kbd>1</kbd></div>
                   <div><b>Mermaid canvas</b><kbd>2</kbd></div>
-                  <div><b>Beautiful canvas</b><kbd>3</kbd></div>
+                  <div><b>Beautiful workspace</b><kbd>3</kbd></div>
                 </div>
               </div>
               <div className="shortcuts-section">

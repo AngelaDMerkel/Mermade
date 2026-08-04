@@ -1,7 +1,20 @@
 export type UnicodeExportResult = {
   content: string;
+  html?: string;
   simplified: boolean;
+  error?: string;
+  layoutAdapted?: boolean;
 };
+
+export type TextDiagramTheme = {
+  bg: string;
+  fg: string;
+  line?: string;
+  accent?: string;
+  border?: string;
+};
+
+export type TextDiagramFormat = "unicode" | "ascii";
 
 type UnicodeWorkerMessage =
   | { ok: true; result: UnicodeExportResult }
@@ -34,9 +47,13 @@ export function createUnicodeSourceOutline(source: string, reason = "The spatial
   ].join("\n");
 }
 
-export function renderUnicodeDiagram(source: string, timeoutMs = 8_000): Promise<UnicodeExportResult> {
+export function renderTextDiagram(source: string, format: TextDiagramFormat, timeoutMs = 20_000, theme?: TextDiagramTheme): Promise<UnicodeExportResult> {
   if (typeof Worker === "undefined") {
-    return Promise.resolve({ content: createUnicodeSourceOutline(source), simplified: true });
+    return Promise.resolve({
+      content: createUnicodeSourceOutline(source),
+      simplified: true,
+      error: "This browser cannot start the Beautiful Mermaid text-rendering worker.",
+    });
   }
 
   return new Promise((resolve) => {
@@ -57,16 +74,22 @@ export function renderUnicodeDiagram(source: string, timeoutMs = 8_000): Promise
     const timer = window.setTimeout(() => finish({
       content: createUnicodeSourceOutline(source, "This diagram was too complex for the spatial Unicode renderer, so Mermade preserved its semantic statements instead."),
       simplified: true,
+      error: "Beautiful Mermaid's text layout did not complete within 20 seconds.",
     }), timeoutMs);
 
     worker.onmessage = (event: MessageEvent<UnicodeWorkerMessage>) => {
       if (event.data.ok) finish(event.data.result);
-      else finish({ content: createUnicodeSourceOutline(source, event.data.error), simplified: true });
+      else finish({ content: createUnicodeSourceOutline(source, event.data.error), simplified: true, error: event.data.error });
     };
     worker.onerror = () => finish({
       content: createUnicodeSourceOutline(source, "The Unicode rendering worker failed, so Mermade preserved the diagram's semantic statements instead."),
       simplified: true,
+      error: "The Beautiful Mermaid text-rendering worker failed.",
     });
-    worker.postMessage({ source });
+    worker.postMessage({ source, format, theme });
   });
+}
+
+export function renderUnicodeDiagram(source: string, timeoutMs = 20_000) {
+  return renderTextDiagram(source, "unicode", timeoutMs);
 }

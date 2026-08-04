@@ -1,60 +1,60 @@
 import { parseMermaid, renderMermaidASCII } from "beautiful-mermaid";
 import { sourceForPolishedRenderer } from "./beautiful-mermaid";
-import type { UnicodeExportResult } from "./unicode-export";
+import type { TextDiagramFormat, TextDiagramTheme, UnicodeExportResult } from "./unicode-export";
 
 type WorkerScope = {
-  onmessage: ((event: MessageEvent<{ source: string }>) => void) | null;
+  onmessage: ((event: MessageEvent<{ source: string; format: TextDiagramFormat; theme?: TextDiagramTheme }>) => void) | null;
   postMessage: (message: { ok: true; result: UnicodeExportResult } | { ok: false; error: string }) => void;
 };
 
 const workerScope = self as unknown as WorkerScope;
 
-function nodeMarker(shape: string) {
-  if (shape === "diamond") return "◇";
-  if (shape === "circle" || shape === "doublecircle") return "○";
-  if (shape === "stadium" || shape === "rounded") return "◉";
-  if (shape === "state-start") return "●";
-  if (shape === "state-end") return "◎";
-  return "□";
+function mixHex(foreground: string, background: string, percentage: number) {
+  const parse = (colour: string) => {
+    const hex = colour.replace("#", "");
+    return hex.length === 3
+      ? [...hex].map((value) => Number.parseInt(value + value, 16))
+      : [0, 2, 4].map((index) => Number.parseInt(hex.slice(index, index + 2), 16));
+  };
+  const foregroundChannels = parse(foreground);
+  const backgroundChannels = parse(background);
+  const amount = percentage / 100;
+  return `#${foregroundChannels.map((channel, index) => Math.round(channel * amount + backgroundChannels[index] * (1 - amount)).toString(16).padStart(2, "0")).join("")}`;
 }
 
-function cleanLabel(value: string) {
-  return value.replace(/\s+/g, " ").trim();
+/** Match Beautiful Mermaid's published DiagramColors → AsciiTheme bridge. */
+function asciiTheme(theme: TextDiagramTheme) {
+  const line = theme.line || mixHex(theme.fg, theme.bg, 50);
+  const border = theme.border || mixHex(theme.fg, theme.bg, 20);
+  return {
+    fg: theme.fg,
+    bg: theme.bg,
+    line,
+    border,
+    arrow: theme.accent || mixHex(theme.fg, theme.bg, 85),
+    accent: theme.accent,
+    corner: line,
+    junction: border,
+  };
 }
 
-function relationshipMap(source: string): UnicodeExportResult | null {
-  const firstLine = source.trim().split(/\r?\n/, 1)[0]?.toLowerCase() || "";
-  if (!/^(?:flowchart|graph|statediagram)/.test(firstLine)) return null;
-
+/**
+ * Beautiful Mermaid's grid router can become pathologically slow for tall,
+ * densely connected graphs. Its LR router handles the same graph faithfully
+ * and quickly, so adapt only the text-rendering copy when that known shape is
+ * detected. Canonical Mermaid source and SVG direction remain untouched.
+ */
+function sourceForSpatialTextRenderer(source: string) {
+  if (!/^\s*(?:flowchart|graph)\s+(?:TB|TD)\b/im.test(source)) return { source, layoutAdapted: false };
   const graph = parseMermaid(source);
-  if (graph.nodes.size <= 24 && graph.edges.length <= 36) return null;
-
-  const outgoing = new Map<string, typeof graph.edges>();
-  for (const edge of graph.edges) {
-    const edges = outgoing.get(edge.source) || [];
-    edges.push(edge);
-    outgoing.set(edge.source, edges);
-  }
-
-  const lines = [
-    `UNICODE RELATIONSHIP MAP · ${graph.direction}`,
-    "════════════════════════════════",
-    "Large diagrams use a relationship map to keep Unicode export responsive.",
-    "",
-  ];
-  for (const node of graph.nodes.values()) {
-    lines.push(`${nodeMarker(node.shape)} ${cleanLabel(node.label)}  [${node.id}]`);
-    const edges = outgoing.get(node.id) || [];
-    edges.forEach((edge, index) => {
-      const target = graph.nodes.get(edge.target);
-      const branch = index === edges.length - 1 ? "└" : "├";
-      const connector = edge.hasArrowEnd ? "─▶" : "──";
-      const label = edge.label ? ` ${cleanLabel(edge.label)} ` : " ";
-      lines.push(`  ${branch}${label}${connector} ${cleanLabel(target?.label || edge.target)}  [${edge.target}]`);
-    });
-    lines.push("");
-  }
-  return { content: lines.join("\n").trimEnd(), simplified: true };
+  const denseVerticalGraph = graph.nodes.size >= 18 && graph.edges.length >= graph.nodes.size;
+  const exceptionallyLargeGraph = graph.nodes.size >= 26;
+  const groupedVerticalGraph = graph.subgraphs.length > 0 && graph.nodes.size >= 15;
+  if (!denseVerticalGraph && !exceptionallyLargeGraph && !groupedVerticalGraph) return { source, layoutAdapted: false };
+  return {
+    source: source.replace(/^(\s*)(flowchart|graph)\s+(?:TB|TD)\b/im, "$1$2 LR"),
+    layoutAdapted: true,
+  };
 }
 
 workerScope.onmessage = (event) => {
@@ -62,10 +62,22 @@ workerScope.onmessage = (event) => {
     // Presentation directives cannot affect plain text and noticeably increase
     // the work required for heavily styled source.
     const adapted = sourceForPolishedRenderer(event.data.source, false);
-    const simplified = relationshipMap(adapted);
-    const result = simplified || {
-      content: renderMermaidASCII(adapted, { colorMode: "none", useAscii: false }),
+    const textLayout = sourceForSpatialTextRenderer(adapted);
+    const format = event.data.format || "unicode";
+    const useAscii = format === "ascii";
+    const options = { useAscii, paddingX: 5, paddingY: 5, boxBorderPadding: 1 } as const;
+    const content = renderMermaidASCII(textLayout.source, { ...options, colorMode: "none" });
+    const result = {
+      content,
+      ...(event.data.theme ? {
+        html: renderMermaidASCII(textLayout.source, {
+          ...options,
+          colorMode: "html",
+          theme: asciiTheme(event.data.theme),
+        }),
+      } : {}),
       simplified: false,
+      layoutAdapted: textLayout.layoutAdapted,
     };
     workerScope.postMessage({ ok: true, result });
   } catch (error) {
