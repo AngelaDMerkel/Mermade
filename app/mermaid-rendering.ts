@@ -1,3 +1,5 @@
+import { parseGanttSource } from "./gantt-source";
+
 export function normalizeRenderedSvg(svg: SVGSVGElement, diagramTypeId: string, source: string) {
   svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
 
@@ -33,6 +35,16 @@ export function normalizeRenderedSvg(svg: SVGSVGElement, diagramTypeId: string, 
         hit.setAttribute("width", String(bounds.width));
         hit.setAttribute("height", String(bounds.height));
         hit.setAttribute("vector-effect", "non-scaling-stroke");
+        // Mermaid emits diagram-scoped `!important` rules for classDef styles.
+        // In particular, `classDef default stroke:...` also matches rectangles
+        // injected beneath every node. Keep this editor-only hit target
+        // invisible with inline important declarations, which outrank the
+        // generated diagram stylesheet without changing the Mermaid source.
+        hit.style.setProperty("fill", "transparent", "important");
+        hit.style.setProperty("stroke", "transparent", "important");
+        hit.style.setProperty("stroke-width", "14px", "important");
+        hit.style.setProperty("opacity", "0", "important");
+        hit.style.setProperty("pointer-events", "all");
         node.insertBefore(hit, node.firstChild);
       } catch {
         // Detached export SVGs may not expose getBBox; the visible renderer does.
@@ -74,6 +86,20 @@ export function sourceLineForRenderedText(source: string, renderedText: string) 
   const label = comparableText(renderedText);
   if (label.length < 2) return -1;
 
+  // A Gantt dependency may repeat another task's label or ID (`after research`).
+  // Prefer the exact task-title/section-name field before generic containment,
+  // otherwise the shortest dependency statement can steal the rendered label.
+  if (/^\s*gantt\b/im.test(source)) {
+    const exactGanttLine = source.split(/\r?\n/).findIndex((line) => {
+      const trimmed = line.trim();
+      const section = trimmed.match(/^section\s+(.+?)\s*$/i);
+      if (section) return comparableText(section[1]) === label;
+      const separator = trimmed.indexOf(":");
+      return separator > 0 && comparableText(trimmed.slice(0, separator)) === label;
+    });
+    if (exactGanttLine >= 0) return exactGanttLine;
+  }
+
   const candidates = source.split(/\r?\n/)
     .map((line, index) => ({ line: comparableText(line), index, rawLength: line.length }))
     .filter(({ line }) => line && !line.startsWith("%%") && !line.startsWith("---"));
@@ -86,9 +112,78 @@ export function sourceLineForRenderedText(source: string, renderedText: string) 
 /** Attach source-line metadata to rendered labels and their nearest SVG group. */
 export function decorateRenderedStatements(svg: SVGSVGElement, source: string) {
   const decorated = new Set<Element>();
+  const isGantt = /^\s*gantt\b/im.test(source);
+  const ganttDocument = isGantt ? parseGanttSource(source) : null;
+  const ganttTaskLines = new Map<string, number[]>();
+  const ganttSectionLines = new Map<string, number[]>();
+  const ganttBars = isGantt ? [...svg.querySelectorAll<SVGElement>("rect.task")] : [];
+  const ganttBarsById = new Map<string, SVGElement[]>();
+  const ganttTasksById = new Map<string, NonNullable<typeof ganttDocument>["tasks"]>();
+  const assignedGanttBars = new Set<SVGElement>();
+  const renderedTextOccurrences = new Map<string, number>();
+  const sourceLines = source.split(/\r?\n/);
+  ganttDocument?.tasks.forEach((task) => ganttTaskLines.set(comparableText(task.label), [...(ganttTaskLines.get(comparableText(task.label)) || []), task.lineIndex]));
+  ganttDocument?.tasks.forEach((task) => {
+    if (task.id) ganttTasksById.set(task.id, [...(ganttTasksById.get(task.id) ?? []), task]);
+  });
+  ganttDocument?.sections.forEach((section) => ganttSectionLines.set(comparableText(section.label), [...(ganttSectionLines.get(comparableText(section.label)) || []), section.lineIndex]));
+  ganttBars.forEach((bar) => {
+    if (!bar.id) return;
+    ganttBarsById.set(bar.id, [...(ganttBarsById.get(bar.id) || []), bar]);
+  });
   svg.querySelectorAll<SVGGraphicsElement>("text, foreignObject").forEach((label) => {
-    const line = sourceLineForRenderedText(source, label.textContent || "");
+    const renderedLabel = comparableText(label.textContent || "");
+    const isGanttTaskLabel = label instanceof SVGTextElement && [...label.classList].some((name) => name.startsWith("taskText"));
+    const textBarId = isGanttTaskLabel && label.id.endsWith("-text") ? label.id.slice(0, -5) : "";
+    const taskFromUniqueId = textBarId
+      ? [...ganttTasksById.entries()]
+        .filter(([id, tasks]) => tasks.length === 1 && textBarId.endsWith(`-${id}`))
+        .sort(([left], [right]) => right.length - left.length)[0]?.[1][0]
+      : undefined;
+    const taskLinesForLabel = isGanttTaskLabel ? ganttTaskLines.get(renderedLabel) : undefined;
+    if (taskFromUniqueId && taskLinesForLabel) {
+      const preferredIndex = taskLinesForLabel.indexOf(taskFromUniqueId.lineIndex);
+      if (preferredIndex >= 0) taskLinesForLabel.splice(preferredIndex, 1);
+    }
+    const taskLine = isGanttTaskLabel ? taskFromUniqueId?.lineIndex ?? taskLinesForLabel?.shift() : undefined;
+    const sectionLine = label instanceof SVGTextElement && label.classList.contains("sectionTitle")
+      ? ganttSectionLines.get(renderedLabel)?.shift()
+      : undefined;
+    let line = taskLine ?? sectionLine;
+    if (line === undefined) {
+      const occurrence = renderedTextOccurrences.get(renderedLabel) ?? 0;
+      const matchingLines = renderedLabel.length < 2 ? [] : sourceLines
+        .map((candidate, index) => ({ candidate: comparableText(candidate), index }))
+        .filter(({ candidate }) => candidate && !candidate.startsWith("%%") && !candidate.startsWith("---") && candidate.includes(renderedLabel))
+        .map(({ index }) => index);
+      line = matchingLines[occurrence] ?? matchingLines[0] ?? sourceLineForRenderedText(source, label.textContent || "");
+      renderedTextOccurrences.set(renderedLabel, occurrence + 1);
+    }
     if (line < 0) return;
+    if (isGantt && isGanttTaskLabel) {
+      label.dataset.sourceLine = String(line);
+      decorated.add(label);
+      const textId = label.id;
+      const barId = textId.endsWith("-text") ? textId.slice(0, -5) : "";
+      // Mermaid can emit duplicate SVG ids when otherwise-renderable Gantt
+      // source reuses a task id. An id selector always returns the first bar,
+      // so consume matching bars by occurrence and then fall back to rendered
+      // task order. This keeps every label attached to its own visual bar.
+      const matchingBars = barId ? ganttBarsById.get(barId) : undefined;
+      let bar = matchingBars?.find((candidate) => !assignedGanttBars.has(candidate));
+      bar ??= ganttBars.find((candidate) => !assignedGanttBars.has(candidate));
+      if (bar) {
+        bar.dataset.sourceLine = String(line);
+        assignedGanttBars.add(bar);
+        decorated.add(bar);
+      }
+      return;
+    }
+    if (isGantt && label instanceof SVGTextElement && label.classList.contains("sectionTitle")) {
+      label.dataset.sourceLine = String(line);
+      decorated.add(label);
+      return;
+    }
     const target = label.closest("g") || label;
     if (!(target instanceof SVGElement)) return;
     target.dataset.sourceLine = String(line);

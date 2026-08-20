@@ -22,4 +22,6 @@ test("the compatibility patch covers Mermaid and the external ELK package", asyn
   assert.match(patchScript, /node_modules\/@mermaid-js\/layout-elk\/dist/);
   assert.match(patchScript, /JSON\.stringify\(elkGraph, null, 2\)/);
   assert.match(patchScript, /key === "domId" \|\| key === "labelNode"/);
+  assert.match(patchScript, /Mermade exact until target/);
+  assert.match(patchScript, /until\\\\s\+/);
 });

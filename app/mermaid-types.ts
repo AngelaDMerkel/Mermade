@@ -24,7 +24,7 @@ export const MERMAID_DIAGRAM_TYPES: MermaidDiagramType[] = [
   { id: "swimlane", label: "Swimlanes", family: "structured", declaration: /^swimlane-beta\b/i, template: "swimlane-beta LR\n  subgraph Customer\n    request[Request]\n  end\n  subgraph Team\n    deliver[Deliver]\n  end\n  request --> deliver" },
   { id: "sequence", label: "Sequence Diagram", family: "structured", declaration: /^sequenceDiagram\b/i, template: "sequenceDiagram\n  Alice->>Bob: Hello\n  Bob-->>Alice: Hi" },
   { id: "journey", label: "User Journey", family: "structured", declaration: /^journey\b/i, template: "journey\n  title User journey\n  section Start\n    Open project: 5: User" },
-  { id: "gantt", label: "Gantt", family: "structured", declaration: /^gantt\b/i, template: "gantt\n  title Project plan\n  dateFormat YYYY-MM-DD\n  section Plan\n    First task :a1, 2026-01-01, 3d" },
+  { id: "gantt", label: "Gantt", family: "structured", declaration: /^gantt\b/i, template: "gantt\n  title Project plan\n  dateFormat YYYY-MM-DD\n  inclusiveEndDates\n  tickInterval 1week\n  weekday monday\n  section Plan\n    First task :a1, 2026-01-05, 5d" },
   { id: "gitGraph", label: "Git Graph", family: "structured", declaration: /^gitGraph\b/i, template: "gitGraph\n  commit id: \"Start\"\n  branch feature\n  checkout feature\n  commit id: \"Work\"" },
   { id: "timeline", label: "Timeline", family: "structured", declaration: /^timeline\b/i, template: "timeline\n  title Project timeline\n  2026 : Start\n  2027 : Finish" },
   { id: "zenuml", label: "ZenUML", family: "structured", declaration: /^zenuml\b/i, template: "zenuml\n  Controller.Get(id) {\n    result = Service.Get(id)\n    return result\n  }" },

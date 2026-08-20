@@ -41,6 +41,27 @@ function stripMermaidWrapper(source: string) {
   return source;
 }
 
+/**
+ * Mermaid rejects empty quoted flowchart labels such as `node[""]`. Older
+ * Mermade builds could create that statement when a node's text was cleared.
+ * A single whitespace character preserves the intended visually blank label
+ * while remaining valid Mermaid syntax.
+ */
+export function repairEmptyFlowchartNodeLabels(source: string) {
+  if (!/^\s*(?:---[\s\S]*?---\s*)?(?:flowchart|graph)\b/im.test(source)) return source;
+  const patterns: RegExp[] = [
+    /(\b[A-Za-z_][\w-]*@\{[^{}\r\n]*\blabel\s*:\s*)(["'])\s*\2([ \t]*)/g,
+    /(\b[A-Za-z_][\w-]*\s*\(\[\s*)(["'])\s*\2(\s*\]\))/g,
+    /(\b[A-Za-z_][\w-]*\s*\(\(\s*)(["'])\s*\2(\s*\)\))/g,
+    /(\b[A-Za-z_][\w-]*\s*\{\{\s*)(["'])\s*\2(\s*\}\})/g,
+    /(\b[A-Za-z_][\w-]*\s*\{\s*)(["'])\s*\2(\s*\})/g,
+    /(\b[A-Za-z_][\w-]*\s*\[\s*)(["'])\s*\2(\s*\])/g,
+  ];
+  return patterns.reduce((candidate, pattern) => candidate.replace(pattern, (_match, prefix: string, quote: string, suffix = "") => (
+    `${prefix}${quote} ${quote}${suffix}`
+  )), source);
+}
+
 function normalizeTypography(source: string) {
   return source
     .replace(/[“”]/g, '"')
@@ -153,9 +174,19 @@ export function createRepairProposals(source: string, selectedVersion: RepairVer
     });
   }
 
+  const withValidLabels = inferredTypeId === "flowchart" ? repairEmptyFlowchartNodeLabels(withDeclaration) : withDeclaration;
+  if (withValidLabels !== withDeclaration) add(proposals, {
+    id: "repair-empty-flowchart-labels",
+    title: "Repair empty node labels",
+    description: "Preserve visually blank nodes with a whitespace label that Mermaid can parse.",
+    confidence: "high",
+    category: "diagram",
+    source: withValidLabels,
+  });
+
   if (inferredTypeId === "flowchart") {
-    const balanced = balanceFlowchartSubgraphs(withDeclaration);
-    if (balanced !== withDeclaration) add(proposals, {
+    const balanced = balanceFlowchartSubgraphs(withValidLabels);
+    if (balanced !== withValidLabels) add(proposals, {
       id: "close-subgraphs",
       title: "Close unfinished subgraphs",
       description: "Add the missing `end` statements required by the flowchart’s subgraph blocks.",
@@ -189,7 +220,9 @@ export function createRepairProposals(source: string, selectedVersion: RepairVer
   }
 
   const combinedBase = addDiagramDeclaration(repairHeader(normalizeTypography(stripMermaidWrapper(stripMarkdownFence(source)))), inferredTypeId);
-  const combined = inferredTypeId === "flowchart" ? balanceFlowchartSubgraphs(combinedBase) : combinedBase;
+  const combined = inferredTypeId === "flowchart"
+    ? balanceFlowchartSubgraphs(repairEmptyFlowchartNodeLabels(combinedBase))
+    : combinedBase;
   if (combined !== source) add(proposals, {
     id: "apply-safe-repairs",
     title: "Apply all safe repairs",

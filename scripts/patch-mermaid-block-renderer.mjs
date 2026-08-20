@@ -10,6 +10,7 @@ const searchRoots = [
 let patched = 0;
 let blockTargets = 0;
 let elkTargets = 0;
+let ganttUntilTargets = 0;
 
 for (const searchRoot of searchRoots) {
   const dist = join(process.cwd(), searchRoot);
@@ -26,6 +27,7 @@ for (const searchRoot of searchRoots) {
     const source = await readFile(file, "utf8");
     if (source.includes("[Block layout omitted]")) blockTargets += 1;
     if (source.includes("[ELK graph omitted]") && source.includes("ELK DOM fields omitted")) elkTargets += 1;
+    if (source.includes("Mermade exact until target")) ganttUntilTargets += 1;
     const next = source
       .replaceAll(
         'JSON.stringify(child.size, (key, value) => key === "node" ? undefined : value)',
@@ -62,6 +64,22 @@ for (const searchRoot of searchRoots) {
       .replaceAll(
         "JSON.parse(JSON.stringify(node))",
         'JSON.parse(JSON.stringify(node, (key, value) => key === "domId" || key === "labelNode" ? undefined : value /* ELK DOM fields omitted */))',
+      )
+      .replaceAll(
+        'task.manualEndTime = dayjs(endTimeData, "YYYY-MM-DD", true).isValid();',
+        'task.manualEndTime = dayjs(endTimeData, "YYYY-MM-DD", true).isValid() || /^until\\s+/i.test(endTimeData) /* Mermade exact until target */;',
+      )
+      .replaceAll(
+        `rawTasks[pos].manualEndTime = dayjs(
+          rawTasks[pos].raw.endTime.data,
+          "YYYY-MM-DD",
+          true
+        ).isValid();`,
+        `rawTasks[pos].manualEndTime = dayjs(
+          rawTasks[pos].raw.endTime.data,
+          "YYYY-MM-DD",
+          true
+        ).isValid() || /^until\\s+/i.test(rawTasks[pos].raw.endTime.data) /* Mermade exact until target */;`,
       );
 
     if (next !== source) {
@@ -69,6 +87,7 @@ for (const searchRoot of searchRoots) {
       patched += 1;
       if (next.includes("[Block layout omitted]")) blockTargets += 1;
       if (next.includes("[ELK graph omitted]") && next.includes("ELK DOM fields omitted")) elkTargets += 1;
+      if (next.includes("Mermade exact until target")) ganttUntilTargets += 1;
     }
   }
 }
@@ -78,6 +97,9 @@ if (blockTargets === 0) {
 }
 if (elkTargets === 0) {
   throw new Error("The Mermaid ELK compatibility target was not found; review the installed layout package.");
+}
+if (ganttUntilTargets === 0) {
+  throw new Error("The Mermaid Gantt until compatibility target was not found; review the installed Mermaid versions.");
 }
 
 console.log(patched > 0 ? `Patched ${patched} Mermaid renderer files.` : "Mermaid renderer compatibility patches already applied.");

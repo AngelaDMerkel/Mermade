@@ -2,6 +2,7 @@
 
 import { ArrowDown, ArrowUp, Check, Plus, RotateCcw, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
+import { appendGanttSection, appendGanttTask, parseGanttSource } from "./gantt-source";
 import type { MermaidDiagramType } from "./mermaid-types";
 import { visualModeLabel } from "./mermaid-types";
 
@@ -24,6 +25,7 @@ export function SemanticVisualEditor({ source, type, onCommit }: Props) {
   const statementIndexes = useMemo(() => lines.map((_, index) => index).filter((index) => index !== headerIndex), [headerIndex, lines]);
   const dirty = lines.join("\n") !== source;
   const mode = visualModeLabel(type.family);
+  const ganttDocument = useMemo(() => type.id === "gantt" ? parseGanttSource(lines.join("\n")) : null, [lines, type.id]);
 
   const updateLine = (index: number, value: string) => {
     setLines((current) => current.map((line, lineIndex) => lineIndex === index ? value : line));
@@ -51,6 +53,17 @@ export function SemanticVisualEditor({ source, type, onCommit }: Props) {
     setError("");
   };
 
+  const addGanttSection = () => {
+    setLines(appendGanttSection(lines.join("\n")).split("\n"));
+    setError("");
+  };
+
+  const addGanttTask = () => {
+    const sectionLineIndex = ganttDocument?.sections.at(-1)?.lineIndex ?? null;
+    setLines(appendGanttTask(lines.join("\n"), sectionLineIndex).source.split("\n"));
+    setError("");
+  };
+
   const apply = async () => {
     setBusy(true);
     setError("");
@@ -67,10 +80,11 @@ export function SemanticVisualEditor({ source, type, onCommit }: Props) {
       </header>
       <div className="semantic-editor-body">
         <div className="semantic-declaration"><span>Diagram declaration</span><code>{headerIndex >= 0 ? lines[headerIndex] : type.label}</code></div>
-        <div className="semantic-statements">
+        <div className={`semantic-statements ${type.id === "gantt" ? "semantic-gantt-statements" : ""}`}>
           {statementIndexes.map((index) => (
-            <article key={`${index}-${statementIndexes.length}`} className="semantic-statement">
+            <article key={`${index}-${statementIndexes.length}`} className={`semantic-statement ${ganttDocument?.items.find((item) => item.lineIndex === index)?.kind ? `gantt-${ganttDocument.items.find((item) => item.lineIndex === index)?.kind}` : ""}`}>
               <span className="semantic-line-number">{index + 1}</span>
+              {type.id === "gantt" && <span className="gantt-statement-kind">{ganttDocument?.items.find((item) => item.lineIndex === index)?.kind === "section" ? "Section" : ganttDocument?.items.find((item) => item.lineIndex === index)?.kind === "task" ? "Task bar" : "Chart setting"}</span>}
               <textarea
                 aria-label={`Mermaid statement on line ${index + 1}`}
                 rows={Math.max(1, Math.min(4, lines[index].split("\n").length))}
@@ -84,7 +98,10 @@ export function SemanticVisualEditor({ source, type, onCommit }: Props) {
               </div>
             </article>
           ))}
-          <button className="semantic-add" type="button" onClick={addStatement}><Plus size={15} /> Add statement</button>
+          {type.id === "gantt" ? <div className="semantic-gantt-add">
+            <button className="semantic-add" type="button" aria-label="Add statement" onClick={addGanttTask}><Plus size={15} /> Add task bar</button>
+            <button className="semantic-add" type="button" onClick={addGanttSection}><Plus size={15} /> Add section</button>
+          </div> : <button className="semantic-add" type="button" onClick={addStatement}><Plus size={15} /> Add statement</button>}
         </div>
       </div>
       <footer>

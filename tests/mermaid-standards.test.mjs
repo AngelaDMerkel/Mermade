@@ -104,6 +104,27 @@ test("every Mermaid type starter meets the SVG rendering standard", { timeout: 1
   }
 });
 
+test("Gantt task bars, duplicate task text and section text map to their exact source lines", async () => {
+  const source = "gantt\n  title Delivery plan\n  dateFormat YYYY-MM-DD\n  section Discovery\n  Research :done, research, 2026-08-01, 5d\n  section Delivery\n  Research :crit, build, after research, 8d";
+  const rendered = await page.evaluate((candidate) => window.mermadeStandards.inspectGanttSelection(candidate), source);
+
+  assert.match(rendered.diagramType, /gantt/i);
+  assert.deepEqual(rendered.sectionLines, ["3", "5"]);
+  assert.deepEqual(rendered.taskLines, ["4", "6"]);
+  assert.deepEqual(rendered.barLines, ["4", "6"]);
+});
+
+test("Gantt labels remain attached to separate bars when Mermaid emits duplicate task ids", async () => {
+  const rendered = await page.evaluate(() => window.mermadeStandards.inspectDuplicateGanttIdSelection());
+  assert.deepEqual(rendered.taskLines, ["3", "4"]);
+  assert.deepEqual(rendered.barLines, ["3", "4"]);
+});
+
+test("repeated flowchart labels retain separate source-line identities", async () => {
+  const sourceLines = await page.evaluate(() => window.mermadeStandards.inspectRepeatedFlowchartLabelSelection());
+  assert.deepEqual(sourceLines, ["1", "2"]);
+});
+
 test("diagram-wide frontmatter style parses and renders for every Mermaid type", { timeout: 120_000 }, async (t) => {
   for (const type of types) {
     await t.test(type.label, async () => {
@@ -253,6 +274,388 @@ test("double-clicking an unselected Mermaid flowchart node opens text editing", 
   const editor = page.locator(".mermaid-inline-editor input");
   await editor.waitFor({ state: "visible" });
   assert.equal(await editor.inputValue(), "Cart");
+  assert.equal(
+    await node.locator(":scope > .mermade-node-hit").evaluate((element) => getComputedStyle(element).stroke),
+    "rgba(0, 0, 0, 0)",
+    "the enlarged node hit target must remain invisible while its node is selected",
+  );
+});
+
+test("visual node labels preserve square brackets as quoted Mermaid text", { timeout: 60_000 }, async () => {
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Source", exact: true }).click();
+  const originalSource = await page.getByRole("textbox", { name: "Mermaid source" }).inputValue();
+  const source = [
+    "flowchart TB",
+    '  A["Inventory"]',
+    '  B["Done"]',
+    "  A --> B",
+  ].join("\n");
+  try {
+    await page.getByRole("textbox", { name: "Mermaid source" }).fill(source);
+    await applyValidSourceAndWait();
+    await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+    await page.locator(".view-switch button").filter({ hasText: "Mermaid" }).click();
+
+    const node = page.locator('.mermaid-render .node[data-node-id="A"]');
+    await node.waitFor({ state: "visible" });
+    await node.click();
+    assert.match(await page.locator(".selection-heading").textContent(), /Inventory/);
+    await page.getByRole("button", { name: "Properties", exact: true }).click();
+    const text = page.locator(".inspector-body .field-stack textarea").first();
+    await text.waitFor({ state: "visible" });
+    await text.fill("Inventory ");
+    await text.pressSequentially("[SKU]");
+    assert.equal(await text.inputValue(), "Inventory [SKU]");
+    await page.waitForFunction(() => [...document.querySelectorAll(".mermaid-render .nodeLabel")]
+      .some((label) => label.textContent === "Inventory [SKU]"));
+    assert.equal(await page.locator(".mermaid-render-error").count(), 0, "bracketed node text must continue rendering");
+
+    await page.getByRole("button", { name: "Source", exact: true }).click();
+    const updated = await page.getByRole("textbox", { name: "Mermaid source" }).inputValue();
+    assert.match(updated, /^\s*A\["Inventory \[SKU\]"\]$/m, "Mermade must retain the brackets inside one quoted node declaration");
+    assert.equal(updated.match(/^\s*A\["/gm)?.length, 1);
+    assert.doesNotMatch(updated, /"\]"\]/, "visual keystrokes must not leave duplicated shape delimiters");
+    assert.match(updated, /^\s*A --> B$/m);
+  } finally {
+    if (await page.locator(".source-panel").count() === 0) await page.getByRole("button", { name: "Source", exact: true }).click();
+    await page.getByRole("textbox", { name: "Mermaid source" }).fill(originalSource);
+    await applyValidSourceAndWait();
+    await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+  }
+});
+
+test("Mermaid relationship identities keep paths, labels and replacement selection isolated", { timeout: 60_000 }, async () => {
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Source", exact: true }).click();
+  const originalSource = await page.getByRole("textbox", { name: "Mermaid source" }).inputValue();
+  const source = [
+    "---",
+    "config:",
+    "  layout: elk",
+    "---",
+    "flowchart TB",
+    "  node41{Is the required quantity below the threshold?}",
+    "  node9{Is this Product container in the Product Library?}",
+    "  node10[Stamp in the correct Products in Takeoff]",
+    "  node11[Manually enter the correct Shipment Items]",
+    "  node13[Create a Buyout Pull Sheet]",
+    "  node7[Engineering]",
+    "  node9 -->|Yes| node10",
+    "  node9 -->|No| node11",
+    "  node10 --> node13",
+    "  node41 -->|Yes| node9",
+    "  node11 --> node13",
+    "  node41 --> node7",
+  ].join("\n");
+  try {
+    await page.getByRole("textbox", { name: "Mermaid source" }).fill(source);
+    await applyValidSourceAndWait();
+    await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+    await page.getByRole("button", { name: "Source", exact: true }).click();
+    assert.equal(
+      await page.getByRole("textbox", { name: "Mermaid source" }).inputValue(),
+      source,
+      "validated pasted Mermaid must remain the exact authoritative document rather than being regenerated from the visual model",
+    );
+    await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+    await page.locator(".view-switch button").filter({ hasText: "Mermaid" }).click();
+
+    const identityReport = await page.evaluate(() => {
+      const paths = [...document.querySelectorAll(".mermaid-render .edgePaths path:not(.mermaid-edge-hit)")];
+      const labels = [...document.querySelectorAll(".mermaid-render .edgeLabels > .edgeLabel")];
+      const modelIdForRenderedIdentity = new Map(paths.map((path) => [path.dataset.id, path.dataset.edgeId]));
+      return {
+        paths: paths.length,
+        hitTargets: document.querySelectorAll(".mermaid-render .edgePaths path.mermaid-edge-hit").length,
+        directLabels: labels.filter((label) => label.dataset.edgeId).length,
+        nestedLabelsWithEdgeId: document.querySelectorAll(".mermaid-render .edgeLabels > .edgeLabel .edgeLabel[data-edge-id]").length,
+        uniquePathIdentities: new Set(paths.map((path) => path.dataset.edgeId)).size,
+        mismatchedLabels: labels.filter((label) => {
+          const renderedIdentity = label.querySelector("[data-id]")?.getAttribute("data-id");
+          return renderedIdentity && modelIdForRenderedIdentity.get(renderedIdentity) !== label.dataset.edgeId;
+        }).length,
+      };
+    });
+    assert.equal(identityReport.hitTargets, identityReport.paths, "each relationship path must have one wide selectable hit target");
+    assert.equal(identityReport.directLabels, identityReport.paths, "each relationship path must have one top-level label identity");
+    assert.equal(identityReport.nestedLabelsWithEdgeId, 0, "nested Mermaid HTML labels must not consume relationship identities");
+    assert.equal(identityReport.uniquePathIdentities, identityReport.paths, "separate source relationships must retain separate model identities");
+    assert.equal(identityReport.mismatchedLabels, 0, "each label must bind through Mermaid's own relationship identity rather than DOM order");
+
+    const longRelationship = page.locator('.mermaid-render .edgePaths path[data-id="L_node41_node7_0"]:not(.mermaid-edge-hit)');
+    const shortRelationship = page.locator('.mermaid-render .edgePaths path[data-id="L_node10_node13_0"]:not(.mermaid-edge-hit)');
+    const longRelationshipId = await longRelationship.getAttribute("data-edge-id");
+    const shortRelationshipId = await shortRelationship.getAttribute("data-edge-id");
+    assert.ok(longRelationshipId && shortRelationshipId && longRelationshipId !== shortRelationshipId);
+
+    await longRelationship.dispatchEvent("pointerdown", { bubbles: true, button: 0 });
+    assert.deepEqual(
+      await page.locator(".mermaid-render .edgePaths path.mermade-selected:not(.mermaid-edge-hit)").evaluateAll((elements) => elements.map((element) => element.dataset.edgeId)),
+      [longRelationshipId],
+      "the long threshold relationship must be the only visual selection",
+    );
+
+    // A renderer update can replace identity metadata before React reconciles
+    // its selection. The namespaced visual marker must still be cleared from
+    // that formerly selected segment when another relationship is chosen.
+    await longRelationship.evaluate((element) => element.removeAttribute("data-edge-id"));
+    await shortRelationship.dispatchEvent("pointerdown", { bubbles: true, button: 0 });
+    assert.equal(await longRelationship.evaluate((element) => element.classList.contains("mermade-selected")), false);
+    assert.deepEqual(
+      await page.locator(".mermaid-render .edgePaths path.mermade-selected:not(.mermaid-edge-hit)").evaluateAll((elements) => elements.map((element) => element.dataset.edgeId)),
+      [shortRelationshipId],
+      "selecting node10 → node13 must replace, rather than accumulate with, node41 → node7",
+    );
+    assert.match(await page.locator(".selection-heading").textContent(), /node10\s*→\s*node13/);
+
+    await page.keyboard.press("e");
+    const relationshipLabel = page.getByLabel("Label", { exact: true });
+    await page.waitForFunction(() => document.activeElement?.getAttribute("aria-keyshortcuts") === "E");
+    await relationshipLabel.pressSequentially("Source-backed edit");
+    assert.equal(await relationshipLabel.inputValue(), "Source-backed edit", "E must put keyboard focus into the selected relationship label");
+    await page.waitForFunction(() => [...document.querySelectorAll(".mermaid-render .edgeLabels > .edgeLabel")]
+      .some((label) => label.textContent === "Source-backed edit"));
+    await page.getByRole("button", { name: "Source", exact: true }).click();
+    const visuallyEditedSource = await page.getByRole("textbox", { name: "Mermaid source" }).inputValue();
+    assert.match(visuallyEditedSource, /^  node10 -->\|"Source-backed edit"\| node13$/m);
+    assert.ok(
+      visuallyEditedSource.indexOf('  node41 -->|"Yes"| node9') < visuallyEditedSource.indexOf("  node11 --> node13"),
+      "a visual relationship edit must patch the authoritative source without reconstructing its statement order",
+    );
+    await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+
+    const deletionTarget = page.locator('.mermaid-render .edgePaths path[data-id="L_node41_node7_0"]:not(.mermaid-edge-hit)');
+    await deletionTarget.dispatchEvent("pointerdown", { bubbles: true, button: 0 });
+    assert.match(await page.locator(".selection-heading").textContent(), /node41\s*→\s*node7/);
+    await page.getByRole("button", { name: "Delete relationship" }).click();
+    await page.getByRole("button", { name: "Source", exact: true }).click();
+    const sourceAfterDeletion = await page.getByRole("textbox", { name: "Mermaid source" }).inputValue();
+    assert.doesNotMatch(sourceAfterDeletion, /^\s*node41 --> node7$/m, "the selected relationship must be removed");
+    assert.match(sourceAfterDeletion, /^\s*node41 -->\|"?Yes"?\| node9$/m, "another relationship from the same node must remain");
+    assert.match(sourceAfterDeletion, /^\s*node11 --> node13$/m, "an unrelated relationship must remain");
+    assert.doesNotMatch(sourceAfterDeletion, /^\s*node41\s*$/m, "deletion must not append a duplicate bare source node");
+    assert.doesNotMatch(sourceAfterDeletion, /^\s*node7\s*$/m, "deletion must not append a duplicate bare target node");
+    await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+  } finally {
+    if (await page.locator(".source-panel").count() === 0) await page.getByRole("button", { name: "Source", exact: true }).click();
+    await page.getByRole("textbox", { name: "Mermaid source" }).fill(originalSource);
+    await applyValidSourceAndWait();
+    await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+  }
+});
+
+test("the rework return relationship accepts a visual label without changing another edge", { timeout: 60_000 }, async () => {
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Source", exact: true }).click();
+  const originalSource = await page.getByRole("textbox", { name: "Mermaid source" }).inputValue();
+  const source = [
+    "flowchart TB",
+    '  node40@{ shape: fr-rect, label: "Production" }',
+    '  node41["Manufacturing completed"]',
+    '  node69@{ shape: diam, label: "Is there any rework?" }',
+    '  node71@{ shape: diam, label: "Does the Rework require additional Materials?" }',
+    '  node72@{ shape: diam, label: "Is this expected labor less than ten minutes? " }',
+    '  node73["Yes"]',
+    '  node70["Create a Rework Work Order"]',
+    '  node74@{ shape: lean-r, label: "Set the Critical Date" }',
+    '  node75["Plant Manager fulfils the [REWORK] request"]',
+    '  node76["Create required Material Labels"]',
+    '  node77["Advance Workflow to \'In Production\'"]',
+    "  node40 --> node41",
+    "  node40 --> node69",
+    '  node69 -->|"No"| node41',
+    "  node69 --> node71",
+    '  node71 -->|"No"| node72',
+    '  node71 -->|"Yes"| node73',
+    '  node73 -->|"Yes"| node70',
+    '  node72 -->|"No"| node70',
+    "  node70 --> node74",
+    "  node74 --> node75",
+    "  node75 --> node76",
+    "  node76 --> node77",
+    "  node77 --> node41",
+    "  node72 --> node41",
+  ].join("\n");
+  try {
+    await page.getByRole("textbox", { name: "Mermaid source" }).fill(source);
+    await applyValidSourceAndWait();
+    await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+    await page.locator(".view-switch button").filter({ hasText: "Mermaid" }).click();
+
+    const node = page.locator('.mermaid-render [data-node-id="node72"]').first();
+    await node.waitFor({ state: "attached" });
+    await node.dispatchEvent("pointerdown", { bubbles: true, button: 0 });
+    await page.getByRole("button", { name: "Edit outgoing relationship node72 to node41" }).click();
+    assert.match(await page.locator(".selection-heading").textContent(), /node72\s*→\s*node41/);
+    const label = page.getByLabel("Label", { exact: true });
+    await label.pressSequentially("Yes");
+    assert.equal(await label.inputValue(), "Yes");
+    await page.waitForFunction(() => [...document.querySelectorAll(".mermaid-render .edgeLabels > .edgeLabel")]
+      .some((element) => element.textContent === "Yes"));
+
+    await page.getByRole("button", { name: "Source", exact: true }).click();
+    const updated = await page.getByRole("textbox", { name: "Mermaid source" }).inputValue();
+    assert.match(updated, /^\s*node72 -->\|"Yes"\| node41$/m);
+    assert.match(updated, /^\s*node72 -->\|"No"\| node70$/m, "the other node72 relationship must remain unchanged");
+    assert.equal(updated.match(/^\s*node72\s+-->/gm)?.length, 2);
+  } finally {
+    if (await page.locator(".source-panel").count() === 0) await page.getByRole("button", { name: "Source", exact: true }).click();
+    await page.getByRole("textbox", { name: "Mermaid source" }).fill(originalSource);
+    await applyValidSourceAndWait();
+    await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+  }
+});
+
+test("compact Mermaid fan-in and fan-out relationships remain individually deletable", { timeout: 60_000 }, async () => {
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Source", exact: true }).click();
+  const originalSource = await page.getByRole("textbox", { name: "Mermaid source" }).inputValue();
+  const source = [
+    "flowchart TB",
+    '  existing{"Is this an existing Brand partner or a new customer?"}',
+    "  newCustomer[New customer]",
+    "  sales[Sales populates customer details]",
+    "  handoff[Sales handoff]",
+    "  existing & newCustomer --> sales & handoff",
+  ].join("\n");
+  try {
+    await page.getByRole("textbox", { name: "Mermaid source" }).fill(source);
+    await applyValidSourceAndWait();
+    await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+    await page.locator(".view-switch button").filter({ hasText: "Mermaid" }).click();
+    await page.locator('.mermaid-render .edgePaths path[data-id="L_existing_sales_0"]:not(.mermaid-edge-hit)').waitFor({ state: "attached" });
+
+    const relationships = await page.locator(".mermaid-render .edgePaths path:not(.mermaid-edge-hit)").evaluateAll((paths) => paths.map((path) => ({
+      rendered: path.dataset.id,
+      model: path.dataset.edgeId,
+    })));
+    assert.equal(relationships.length, 4, "Mermaid should render all four compact relationships");
+    assert.equal(relationships.filter(({ model }) => model).length, 4, `every rendered relationship must have an exact model identity: ${JSON.stringify(relationships)}`);
+    assert.equal(new Set(relationships.map(({ model }) => model)).size, 4, "compact relationships must never share selection identities");
+
+    const target = page.locator('.mermaid-render .edgePaths path[data-id="L_existing_sales_0"]:not(.mermaid-edge-hit)');
+    await target.dispatchEvent("pointerdown", { bubbles: true, button: 0 });
+    assert.match(await page.locator(".selection-heading").textContent(), /existing\s*→\s*sales/);
+    await page.getByRole("button", { name: "Delete relationship" }).click();
+    await page.getByRole("button", { name: "Source", exact: true }).click();
+    const updated = await page.getByRole("textbox", { name: "Mermaid source" }).inputValue();
+    assert.doesNotMatch(updated, /^\s*existing --> sales$/m);
+    assert.match(updated, /^\s*existing --> handoff$/m);
+    assert.match(updated, /^\s*newCustomer --> sales$/m);
+    assert.match(updated, /^\s*newCustomer --> handoff$/m);
+  } finally {
+    if (await page.locator(".source-panel").count() === 0) await page.getByRole("button", { name: "Source", exact: true }).click();
+    await page.getByRole("textbox", { name: "Mermaid source" }).fill(originalSource);
+    await applyValidSourceAndWait();
+    await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+  }
+});
+
+test("shipment relationship deletion preserves nodes and immediately rebuilds visual identities", { timeout: 60_000 }, async () => {
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Source", exact: true }).click();
+  const originalSource = await page.getByRole("textbox", { name: "Mermaid source" }).inputValue();
+  const source = [
+    "flowchart TB",
+    '  node42["Stage Shipment Items in lanes"]',
+    '  node43@{ shape: cyl, label: "Upload weights and dimensions spreadsheet to Files in INNERGY" }',
+    '  node44["Load Shipment and mark Shipment Items and Shipped in INNERGY"]',
+    '  node45["Project Management confirms shipment status"]',
+    '  node47["Advance Workflow to \'Staged\'"]',
+    "  node42 --> node43",
+    "  node44 --> node45",
+    "  node42 --> node47",
+    "  node43 --> node47",
+    "  node47 --> node44",
+  ].join("\n");
+  try {
+    await page.getByRole("textbox", { name: "Mermaid source" }).fill(source);
+    await applyValidSourceAndWait();
+    await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+    await page.locator(".view-switch button").filter({ hasText: "Mermaid" }).click();
+
+    const stagingRelationship = page.locator('.mermaid-render .edgePaths path[data-id="L_node42_node47_0"]:not(.mermaid-edge-hit)');
+    await stagingRelationship.waitFor({ state: "attached" });
+    const stagingHitTarget = page.locator('.mermaid-render .edgePaths path.mermaid-edge-hit[data-id="L_node42_node47_0"]');
+    assert.ok(
+      await stagingHitTarget.evaluate((element) => {
+        const stage = element.closest(".mermaid-stage");
+        const scale = stage ? new DOMMatrixReadOnly(getComputedStyle(stage).transform).a : 1;
+        return Number.parseFloat(getComputedStyle(element).strokeWidth) * scale >= 15;
+      }),
+      "relationship hit areas must stay at least 15 screen pixels wide when a chart is fitted",
+    );
+    await stagingRelationship.dispatchEvent("pointerdown", { bubbles: true, button: 0 });
+    assert.match(await page.locator(".selection-heading").textContent(), /node42\s*→\s*node47/);
+    await page.getByRole("button", { name: "Delete relationship" }).click();
+
+    await page.getByRole("button", { name: "Source", exact: true }).click();
+    const updated = await page.getByRole("textbox", { name: "Mermaid source" }).inputValue();
+    assert.doesNotMatch(updated, /^\s*node42 --> node47$/m, "only the selected staging relationship should be removed");
+    assert.match(updated, /^\s*node44\["Load Shipment and mark Shipment Items and Shipped in INNERGY"\]$/m, "the downstream node declaration must remain");
+    assert.match(updated, /^\s*node44 --> node45$/m, "the downstream node's outgoing relationship must remain");
+    assert.match(updated, /^\s*node47 --> node44$/m, "the downstream node's incoming relationship must remain");
+    await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+
+    // The deleted relationship was in the middle of the source relationship
+    // list. The following rendered identity therefore receives a new visual
+    // id and proves that React state was re-projected from Mermaid immediately.
+    const downstreamRelationship = page.locator('.mermaid-render .edgePaths path[data-id="L_node47_node44_0"]:not(.mermaid-edge-hit)');
+    await downstreamRelationship.waitFor({ state: "attached" });
+    await downstreamRelationship.dispatchEvent("pointerdown", { bubbles: true, button: 0 });
+    assert.match(
+      await page.locator(".selection-heading").textContent(),
+      /node47\s*→\s*node44/,
+      "the next selection must resolve through the rebuilt Mermaid projection rather than stale edge numbering",
+    );
+  } finally {
+    if (await page.locator(".source-panel").count() === 0) await page.getByRole("button", { name: "Source", exact: true }).click();
+    await page.getByRole("textbox", { name: "Mermaid source" }).fill(originalSource);
+    await applyValidSourceAndWait();
+    await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+  }
+});
+
+test("restoring a source-backed flowchart rebuilds stale duplicate relationship ids", { timeout: 60_000 }, async () => {
+  const sourceBacked = await page.evaluate(() => {
+    const index = JSON.parse(localStorage.getItem("mermade-diagram-library-v1") || "null");
+    if (!index?.activeId) return false;
+    const key = `mermade-diagram-document-v1:${index.activeId}`;
+    const document = JSON.parse(localStorage.getItem(key) || "null");
+    return Boolean(document?.diagram?.source && document.diagram.edges.length >= 2);
+  });
+  assert.equal(sourceBacked, true, "the test diagram must be persisted as source-backed Mermaid");
+
+  // Corrupt the cache at the start of the next document, after the current
+  // page's pagehide flush has completed but before Mermade restores it.
+  await page.addInitScript(() => {
+    if (sessionStorage.getItem("mermade-duplicate-edge-regression")) return;
+    sessionStorage.setItem("mermade-duplicate-edge-regression", "done");
+    const index = JSON.parse(localStorage.getItem("mermade-diagram-library-v1") || "null");
+    if (!index?.activeId) return;
+    const key = `mermade-diagram-document-v1:${index.activeId}`;
+    const document = JSON.parse(localStorage.getItem(key) || "null");
+    if (!document?.diagram?.source || document.diagram.edges.length < 2) return;
+    document.diagram.edges[1].id = document.diagram.edges[0].id;
+    localStorage.setItem(key, JSON.stringify(document));
+  });
+
+  await page.reload();
+  await page.locator(".mermaid-render svg").waitFor({ state: "visible" });
+  const identities = await page.evaluate(() => {
+    const paths = [...document.querySelectorAll(".mermaid-render .edgePaths path:not(.mermaid-edge-hit)")];
+    return {
+      paths: paths.length,
+      unique: new Set(paths.map((path) => path.dataset.edgeId)).size,
+      unbound: paths.filter((path) => !path.dataset.edgeId).length,
+      relationships: paths.map((path) => ({ rendered: path.dataset.id, model: path.dataset.edgeId })),
+    };
+  });
+
+  assert.ok(identities.paths > 1);
+  assert.equal(identities.unbound, 0, "every restored Mermaid relationship must remain selectable");
+  assert.equal(identities.unique, identities.paths, `no two source relationships may share one selection identity: ${JSON.stringify(identities.relationships)}`);
 });
 
 test("local diagram switcher creates, searches, switches, duplicates and deletes isolated charts", { timeout: 60_000 }, async () => {
@@ -372,9 +775,11 @@ test("every registered diagram supports its intended canvas modes", { timeout: 3
           assert.equal(await page.locator(".semantic-error").count(), 0, `${type.label} visual edit must remain valid Mermaid`);
         }
 
-        const beautifulWorkspaceButton = page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "Beautiful", exact: true });
-        assert.equal(await beautifulWorkspaceButton.isEnabled(), beautifulTypes.has(type.id), `${type.label} Beautiful availability must match Beautiful Mermaid`);
+        const workspaceSwitcher = page.getByRole("navigation", { name: "Workspace" });
+        assert.equal(await workspaceSwitcher.count(), beautifulTypes.has(type.id) ? 1 : 0, `${type.label} must show workspace options only when Beautiful Mermaid is compatible`);
         if (beautifulTypes.has(type.id)) {
+          const beautifulWorkspaceButton = workspaceSwitcher.getByRole("button", { name: "Beautiful", exact: true });
+          assert.equal(await beautifulWorkspaceButton.isEnabled(), true, `${type.label} must expose its compatible Beautiful workspace`);
           await beautifulWorkspaceButton.click();
           const beautifulPreview = page.locator(".polished-render");
           await beautifulPreview.locator(':scope > svg[data-renderer="beautiful-mermaid"]').waitFor({ state: "visible" });
@@ -395,6 +800,523 @@ test("every registered diagram supports its intended canvas modes", { timeout: 3
     await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
     await page.locator(".view-switch button").filter({ hasText: "Mermaid" }).click();
     await page.locator(".mermaid-render:not(.polished-render) svg").waitFor({ state: "visible" });
+  }
+});
+
+test("Gantt Mermaid view uses a wide render host and N opens structured creation", { timeout: 60_000 }, async () => {
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Source", exact: true }).click();
+  const originalSource = await page.getByRole("textbox", { name: "Mermaid source" }).inputValue();
+  const ganttSource = "gantt\n  title Delivery plan\n  dateFormat YYYY-MM-DD\n  section Other\n  Hidden dependency :other1, 2026-08-01, 2d\n  section Planning\n  Outline :a1, 2026-08-10, 3d";
+  try {
+    await page.getByRole("textbox", { name: "Mermaid source" }).fill(ganttSource);
+    await applyValidSourceAndWait();
+    await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+    await page.locator(".view-switch button").filter({ hasText: "Mermaid" }).click();
+    const svg = page.locator(".mermaid-render:not(.polished-render) svg");
+    await svg.waitFor({ state: "visible" });
+    const width = await svg.evaluate((element) => element.viewBox.baseVal.width);
+    assert.ok(width >= 1200, `Gantt must render on a wide timeline, received ${width}px`);
+
+    await page.keyboard.press("n");
+    const dialog = page.getByRole("dialog", { name: "Add Gantt item" });
+    await dialog.waitFor({ state: "visible" });
+    await dialog.getByLabel("Task label").fill("Release notes");
+    await dialog.getByLabel("Status").selectOption("active");
+    assert.equal(await dialog.getByLabel("Task ID Automatic").inputValue(), "plan2");
+    await dialog.getByRole("button", { name: "Depends on" }).click();
+    assert.deepEqual(await dialog.getByLabel("Depends on").locator("option").allTextContents(), ["plan1 · Outline"], "dependency choices must stay within the selected section");
+    await dialog.getByLabel("Depends on").selectOption("6");
+    await dialog.getByLabel("Ends on", { exact: true }).fill("2026-08-15");
+    await dialog.getByRole("button", { name: "Create task bar" }).click();
+    await dialog.waitFor({ state: "hidden" });
+    await page.getByRole("button", { name: "Source", exact: true }).click();
+    assert.match(await page.getByRole("textbox", { name: "Mermaid source" }).inputValue(), /Release notes :active, plan2, after plan1, 2026-08-15/);
+    await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+
+    await page.keyboard.press("n");
+    const datedDialog = page.getByRole("dialog", { name: "Add Gantt item" });
+    await datedDialog.getByLabel("Task label").fill("Launch window");
+    await datedDialog.getByLabel("Start date").fill("2026-09-07");
+    await datedDialog.getByLabel("End date").fill("2026-09-11");
+    await datedDialog.getByRole("button", { name: "Create task bar" }).click();
+    await datedDialog.waitFor({ state: "hidden" });
+    await page.getByRole("button", { name: "Source", exact: true }).click();
+    assert.match(await page.getByRole("textbox", { name: "Mermaid source" }).inputValue(), /Launch window :plan3, 2026-09-07, 2026-09-11/);
+    await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+
+    await page.keyboard.press("n");
+    const milestoneDialog = page.getByRole("dialog", { name: "Add Gantt item" });
+    await milestoneDialog.getByLabel("Task label").fill("Conclusion");
+    await milestoneDialog.getByLabel("Milestone").check();
+    assert.equal(await milestoneDialog.getByLabel("Milestone date").count(), 1, "a milestone must expose one date field");
+    assert.equal(await milestoneDialog.getByLabel("End date").count(), 0, "a milestone must not request a date range");
+    await milestoneDialog.getByRole("button", { name: "Depends on" }).click();
+    await milestoneDialog.getByLabel("Depends on").selectOption({ label: "plan3 · Launch window" });
+    assert.equal(await milestoneDialog.getByLabel("Ends on", { exact: true }).count(), 0, "a dependent milestone must use Mermaid’s zero duration automatically");
+    await milestoneDialog.getByRole("button", { name: "Create task bar" }).click();
+    await milestoneDialog.waitFor({ state: "hidden" });
+    await page.getByRole("button", { name: "Source", exact: true }).click();
+    const milestoneSource = await page.getByRole("textbox", { name: "Mermaid source" }).inputValue();
+    assert.match(milestoneSource, /Launch window :plan3, 2026-09-07, 2026-09-11/);
+    assert.match(milestoneSource, /Conclusion :milestone, plan4, after plan3, 0d/);
+    await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+
+    assert.equal(await page.getByRole("button", { name: "Config", exact: true }).count(), 1, "Gantt must rename only its Style tab to Config");
+    await page.getByRole("button", { name: "Config", exact: true }).click();
+    const weekStart = page.getByLabel("Week starts on");
+    const inclusiveEndDates = page.getByLabel("Include selected end date");
+    const excludeWeekends = page.getByLabel("Exclude weekends");
+    assert.equal(await weekStart.inputValue(), "sunday");
+    assert.equal(await inclusiveEndDates.isChecked(), false, "imported source must retain its explicit end-date semantics");
+    assert.equal(await excludeWeekends.isChecked(), false);
+    await weekStart.selectOption("monday");
+    await inclusiveEndDates.check();
+    await excludeWeekends.check();
+    await page.getByRole("button", { name: "Source", exact: true }).click();
+    await page.waitForFunction(() => {
+      const value = document.querySelector('textarea[aria-label="Mermaid source"]')?.value || "";
+      return value.includes("weekday monday") && value.includes("inclusiveEndDates") && value.includes("excludes weekends");
+    });
+    const configuredSource = await page.getByRole("textbox", { name: "Mermaid source" }).inputValue();
+    assert.match(configuredSource, /^\s*tickInterval 1week$/m);
+    assert.match(configuredSource, /^\s*weekday monday$/m);
+    assert.match(configuredSource, /^\s*inclusiveEndDates$/m);
+    assert.match(configuredSource, /^\s*excludes weekends$/m);
+  } finally {
+    const openGanttDialog = page.getByRole("dialog", { name: "Add Gantt item" });
+    if (await openGanttDialog.count()) await openGanttDialog.getByRole("button", { name: "Cancel" }).click();
+    if (await page.locator(".source-panel").count() === 0) await page.getByRole("button", { name: "Source", exact: true }).click();
+    await page.getByRole("textbox", { name: "Mermaid source" }).fill(originalSource);
+    await applyValidSourceAndWait();
+    await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+  }
+});
+
+test("Gantt Properties and Appearance expose separate source-compatible controls", { timeout: 60_000 }, async () => {
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Source", exact: true }).click();
+  const originalSource = await page.getByRole("textbox", { name: "Mermaid source" }).inputValue();
+  const ganttSource = [
+    "gantt",
+    "  dateFormat YYYY-MM-DD",
+    "  section Billing",
+    "  Training :active, crit, training-id, 2026-09-07, 5d",
+  ].join("\n");
+  try {
+    await page.getByRole("textbox", { name: "Mermaid source" }).fill(ganttSource);
+    await applyValidSourceAndWait();
+    await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+    await page.locator(".view-switch button").filter({ hasText: "Mermaid" }).click();
+    await page.locator('text.taskText[data-source-line="3"]').click();
+
+    await page.getByRole("button", { name: "Properties", exact: true }).click();
+    const properties = page.locator(".gantt-item-properties");
+    assert.equal(await properties.getByLabel("Task label").inputValue(), "Training");
+    assert.equal(await properties.locator(".gantt-schedule-fieldset").count(), 1, "Properties must contain scheduling controls");
+    assert.equal(await properties.getByLabel("Task state").count(), 0, "Properties must not duplicate appearance state");
+
+    await page.getByRole("button", { name: "Appearance", exact: true }).click();
+    const appearance = page.locator(".gantt-item-appearance");
+    assert.equal(await appearance.locator(".gantt-schedule-fieldset").count(), 0, "Appearance must not duplicate scheduling controls");
+    assert.equal(await appearance.getByLabel("Task state").inputValue(), "active");
+    assert.equal(await appearance.getByLabel("Critical emphasis").isChecked(), true);
+    await appearance.getByLabel("Task state").selectOption("done");
+    await appearance.getByLabel("Critical emphasis").uncheck();
+    await appearance.getByRole("button", { name: "Apply Gantt appearance" }).click();
+
+    await page.getByRole("button", { name: "Source", exact: true }).click();
+    const editedSource = await page.getByRole("textbox", { name: "Mermaid source" }).inputValue();
+    assert.match(editedSource, /^\s*Training :done, bill1, 2026-09-07, 5d$/m);
+    assert.doesNotMatch(editedSource, /^\s*Training :[^\n]*\bcrit\b/m);
+  } finally {
+    if (await page.locator(".source-panel").count() === 0) await page.getByRole("button", { name: "Source", exact: true }).click();
+    await page.getByRole("textbox", { name: "Mermaid source" }).fill(originalSource);
+    await applyValidSourceAndWait();
+    await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+  }
+});
+
+test("duplicate Gantt task labels retain independent selection and editing identities", { timeout: 60_000 }, async () => {
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Source", exact: true }).click();
+  const originalSource = await page.getByRole("textbox", { name: "Mermaid source" }).inputValue();
+  const duplicateSource = [
+    "gantt",
+    "  title Duplicate labels",
+    "  dateFormat YYYY-MM-DD",
+    "  section Planning",
+    "  Review :first-review, 2026-08-10, 3d",
+    "  Review :second-review, 2026-08-17, 4d",
+  ].join("\n");
+  try {
+    await page.getByRole("textbox", { name: "Mermaid source" }).fill(duplicateSource);
+    await applyValidSourceAndWait();
+    await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+    await page.locator(".view-switch button").filter({ hasText: "Mermaid" }).click();
+
+    const secondBar = page.locator('rect.task[data-source-line="5"]');
+    await secondBar.waitFor({ state: "visible" });
+    await page.locator('text.taskText[data-source-line="5"]').click();
+    await page.getByRole("button", { name: "Properties", exact: true }).click();
+
+    const properties = page.locator(".gantt-item-properties");
+    await properties.waitFor({ state: "visible" });
+    assert.equal(await properties.getByLabel("Task ID Automatic").inputValue(), "plan2");
+    assert.equal(await properties.getByLabel("Start date").inputValue(), "2026-08-17");
+    assert.equal(await properties.getByLabel("End date").inputValue(), "2026-08-21");
+    assert.equal(await properties.getByLabel("Start or dependency").count(), 0, "ordinary task editing must not default to raw schedule fields");
+    await properties.getByRole("button", { name: "Depends on", exact: true }).click();
+    assert.equal(await properties.getByLabel("Depends on").inputValue(), "4");
+    await properties.getByRole("button", { name: "Date range", exact: true }).click();
+    await properties.getByLabel("Task label").fill("Final review");
+    await properties.getByRole("button", { name: "Apply Gantt properties" }).click();
+
+    await page.getByRole("button", { name: "Source", exact: true }).click();
+    const editedSource = await page.getByRole("textbox", { name: "Mermaid source" }).inputValue();
+    assert.match(editedSource, /^\s*Review\s+:plan1, 2026-08-10, 3d$/m);
+    assert.match(editedSource, /^\s*Final review\s+:plan2, 2026-08-17, 4d$/m);
+  } finally {
+    if (await page.locator(".source-panel").count() === 0) await page.getByRole("button", { name: "Source", exact: true }).click();
+    await page.getByRole("textbox", { name: "Mermaid source" }).fill(originalSource);
+    await applyValidSourceAndWait();
+    await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+  }
+});
+
+test("Gantt resize controls remain aligned across task bar styles, zoom levels and while dragging", { timeout: 60_000 }, async () => {
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Source", exact: true }).click();
+  const originalSource = await page.getByRole("textbox", { name: "Mermaid source" }).inputValue();
+  const ganttSource = [
+    "gantt",
+    "  title Resize alignment",
+    "  dateFormat YYYY-MM-DD",
+    "  section Delivery",
+    "  Planned :planned-id, 2026-08-03, 5d",
+    "  Active :active, active-id, after planned-id, 5d",
+    "  Done :done, done-id, 2026-08-17, 5d",
+    "  Critical :crit, critical-id, 2026-08-24, 5d",
+  ].join("\n");
+  try {
+    await page.getByRole("textbox", { name: "Mermaid source" }).fill(ganttSource);
+    await applyValidSourceAndWait();
+    await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+    await page.locator(".view-switch button").filter({ hasText: "Mermaid" }).click();
+
+    for (const line of [4, 5, 6, 7]) {
+      const bar = page.locator(`rect.task[data-source-line="${line}"]`);
+      await page.locator(`text.taskText[data-source-line="${line}"]`).click();
+      const controls = page.locator(".gantt-task-controls");
+      await controls.waitFor({ state: "visible" });
+      await page.waitForFunction((sourceLine) => {
+        const selectedBar = document.querySelector(`rect.task[data-source-line="${sourceLine}"]`);
+        const selectedControls = document.querySelector(".gantt-task-controls");
+        if (!selectedBar || !selectedControls) return false;
+        const barBounds = selectedBar.getBoundingClientRect();
+        const controlBounds = selectedControls.getBoundingClientRect();
+        return Math.abs(barBounds.left - controlBounds.left) <= 2
+          && Math.abs(barBounds.right - controlBounds.right) <= 2;
+      }, line);
+      const [barBox, controlBox, startHandleBox, endHandleBox] = await Promise.all([
+        bar.boundingBox(),
+        controls.boundingBox(),
+        page.getByRole("button", { name: "Adjust task start" }).boundingBox(),
+        page.getByRole("button", { name: "Adjust task duration" }).boundingBox(),
+      ]);
+      assert.ok(barBox && controlBox && startHandleBox && endHandleBox, `task on line ${line + 1} must expose measurable resize controls`);
+      assert.ok(Math.abs(barBox.x - controlBox.x) <= 2, `task on line ${line + 1} start handle must align`);
+      assert.ok(Math.abs(barBox.x + barBox.width - controlBox.x - controlBox.width) <= 2, `task on line ${line + 1} end handle must align`);
+      assert.ok(Math.abs(startHandleBox.x + startHandleBox.width / 2 - barBox.x) <= 2, `task on line ${line + 1} start handle must be centred on the bar edge`);
+      assert.ok(Math.abs(endHandleBox.x + endHandleBox.width / 2 - barBox.x - barBox.width) <= 2, `task on line ${line + 1} end handle must be centred on the bar edge`);
+      assert.ok(Math.abs(startHandleBox.y + startHandleBox.height / 2 - barBox.y - barBox.height / 2) <= 1, `task on line ${line + 1} handles must be vertically centred`);
+    }
+
+    const assertSelectedBarAlignment = async (sourceLine, context) => {
+      await page.waitForFunction((line) => {
+        const selectedBar = document.querySelector(`rect.task[data-source-line="${line}"]`);
+        const selectedControls = document.querySelector(".gantt-task-controls");
+        if (!selectedBar || !selectedControls) return false;
+        const barBounds = selectedBar.getBoundingClientRect();
+        const controlBounds = selectedControls.getBoundingClientRect();
+        return Math.abs(barBounds.left - controlBounds.left) <= 2
+          && Math.abs(barBounds.right - controlBounds.right) <= 2
+          && Math.abs(barBounds.top - controlBounds.top) <= 2
+          && Math.abs(barBounds.bottom - controlBounds.bottom) <= 2;
+      }, sourceLine);
+      const [barBox, controlBox] = await Promise.all([
+        page.locator(`rect.task[data-source-line="${sourceLine}"]`).boundingBox(),
+        page.locator(".gantt-task-controls").boundingBox(),
+      ]);
+      assert.ok(barBox && controlBox, `${context} geometry must be measurable`);
+      assert.ok(Math.abs(barBox.x - controlBox.x) <= 2, `${context} start must remain aligned`);
+      assert.ok(Math.abs(barBox.x + barBox.width - controlBox.x - controlBox.width) <= 2, `${context} end must remain aligned`);
+    };
+
+    await page.locator('text.taskText[data-source-line="5"]').click();
+    for (let step = 0; step < 4; step += 1) {
+      await page.getByRole("button", { name: "Zoom out" }).click();
+      await assertSelectedBarAlignment(5, `zoom-out step ${step + 1}`);
+    }
+    for (let step = 0; step < 6; step += 1) {
+      await page.getByRole("button", { name: "Zoom in" }).click();
+      await assertSelectedBarAlignment(5, `zoom-in step ${step + 1}`);
+    }
+
+    const activeBar = page.locator('rect.task[data-source-line="5"]');
+    await page.locator('text.taskText[data-source-line="5"]').click();
+    const initialBarBox = await activeBar.boundingBox();
+    const svgIdBefore = await page.locator(".mermaid-render:not(.polished-render) svg").getAttribute("id");
+    const endHandle = page.getByRole("button", { name: "Adjust task duration" });
+    const handleBox = await endHandle.boundingBox();
+    assert.ok(handleBox, "selected task must expose an end resize handle");
+    await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(handleBox.x + handleBox.width / 2 + 70, handleBox.y + handleBox.height / 2);
+    await page.waitForTimeout(50);
+    const [draggedBarBox, draggedControlBox] = await Promise.all([
+      activeBar.boundingBox(),
+      page.locator(".gantt-task-controls").boundingBox(),
+    ]);
+    assert.ok(draggedBarBox && draggedControlBox, "drag preview geometry must remain measurable");
+    assert.ok(Math.abs(draggedBarBox.x + draggedBarBox.width - draggedControlBox.x - draggedControlBox.width) <= 2, "end handle must remain attached during resize");
+    const droppedEndX = draggedBarBox.x + draggedBarBox.width;
+    await page.mouse.up();
+    await page.waitForFunction((previousId) => {
+      const svg = document.querySelector(".mermaid-render:not(.polished-render) svg");
+      return Boolean(svg?.id && svg.id !== previousId && !document.querySelector(".mermaid-render-error"));
+    }, svgIdBefore);
+    await page.waitForFunction((expectedEnd) => {
+      const bar = document.querySelector('rect.task[data-source-line="5"]');
+      return Boolean(bar && Math.abs(bar.getBoundingClientRect().right - expectedEnd) <= 2);
+    }, droppedEndX);
+    const committedBox = await page.locator('rect.task[data-source-line="5"]').boundingBox();
+    assert.ok(initialBarBox && committedBox, "the original and committed task bars must remain measurable");
+    assert.ok(Math.abs(committedBox.x - initialBarBox.x) <= 2, "resizing the end must not relocate the task start");
+    assert.ok(Math.abs(committedBox.x + committedBox.width - droppedEndX) <= 2, "the committed end must remain where the snapped preview was dropped");
+    await page.getByRole("button", { name: "Source", exact: true }).click();
+    const resizedSource = await page.getByRole("textbox", { name: "Mermaid source" }).inputValue();
+    assert.match(resizedSource, /^\s*Active\s+:active, deli2, after deli1, \d+d$/m, "end resizing must preserve the task dependency");
+    assert.doesNotMatch(resizedSource, /^\s*Active\s+:active, deli2, after deli1, 5d$/m, "releasing the resize handle must commit the new duration");
+    assert.doesNotMatch(resizedSource, /^\s*Active\s+:active, deli2, \d{4}-\d{2}-\d{2},/m, "end resizing must not replace the dependency with the rendered start date");
+    await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+  } finally {
+    if (await page.locator(".source-panel").count() === 0) await page.getByRole("button", { name: "Source", exact: true }).click();
+    await page.getByRole("textbox", { name: "Mermaid source" }).fill(originalSource);
+    await applyValidSourceAndWait();
+    await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+  }
+});
+
+test("a Billing task with a repeated label commits its own explicit date range", { timeout: 60_000 }, async () => {
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Source", exact: true }).click();
+  const originalSource = await page.getByRole("textbox", { name: "Mermaid source" }).inputValue();
+  const ganttSource = [
+    "gantt",
+    "  title Department training",
+    "  dateFormat YYYY-MM-DD",
+    "  tickInterval 1week",
+    "  weekday monday",
+    "  section Shipping",
+    "  Training :shipping-training, 2026-08-03, 5d",
+    "  section Billing",
+    "  Training :billing-training, 2026-09-07, 5d",
+  ].join("\n");
+  try {
+    await page.getByRole("textbox", { name: "Mermaid source" }).fill(ganttSource);
+    await applyValidSourceAndWait();
+    await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+    await page.locator(".view-switch button").filter({ hasText: "Mermaid" }).click();
+
+    await page.locator('text.taskText[data-source-line="8"]').click();
+    await page.getByRole("button", { name: "Properties", exact: true }).click();
+    const properties = page.locator(".gantt-item-properties");
+    assert.equal(await properties.getByLabel("Task ID Automatic").inputValue(), "bill1");
+    assert.equal(await properties.getByLabel("Start date").inputValue(), "2026-09-07");
+    await properties.getByLabel("Start date").fill("2026-09-14");
+    await properties.getByLabel("End date").fill("2026-09-18");
+    await properties.getByRole("button", { name: "Apply Gantt properties" }).click();
+
+    await page.getByRole("button", { name: "Source", exact: true }).click();
+    const editedSource = await page.getByRole("textbox", { name: "Mermaid source" }).inputValue();
+    assert.match(editedSource, /^\s*Training :ship1, 2026-08-03, 5d$/m);
+    assert.match(editedSource, /^\s*Training :bill1, 2026-09-14, 2026-09-18$/m);
+  } finally {
+    if (await page.locator(".source-panel").count() === 0) await page.getByRole("button", { name: "Source", exact: true }).click();
+    await page.getByRole("textbox", { name: "Mermaid source" }).fill(originalSource);
+    await applyValidSourceAndWait();
+    await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+  }
+});
+
+test("a duration-backed Billing milestone exposes its rendered date as one discrete field", { timeout: 60_000 }, async () => {
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Source", exact: true }).click();
+  const originalSource = await page.getByRole("textbox", { name: "Mermaid source" }).inputValue();
+  const ganttSource = [
+    "gantt",
+    "  dateFormat YYYY-MM-DD",
+    "  section Billing",
+    "  Billing Changeover :milestone, changeover, 2026-09-01, 30d",
+  ].join("\n");
+  try {
+    await page.getByRole("textbox", { name: "Mermaid source" }).fill(ganttSource);
+    await applyValidSourceAndWait();
+    await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+    await page.locator(".view-switch button").filter({ hasText: "Mermaid" }).click();
+
+    await page.locator('text.taskTextOutsideRight[data-source-line="3"]').click();
+    const properties = page.locator(".gantt-item-properties");
+    await properties.waitFor({ state: "visible" });
+    assert.equal(await properties.getByLabel("Milestone", { exact: true }).isChecked(), true);
+    assert.equal(await properties.getByLabel("Milestone date").inputValue(), "2026-09-16", "the field must show Mermaid's rendered midpoint rather than the raw start");
+    assert.equal(await properties.getByLabel("Start date").count(), 0, "a milestone must not expose a range start");
+    assert.equal(await properties.getByLabel("End date").count(), 0, "a milestone must not expose a range end");
+    await properties.getByRole("button", { name: "Apply Gantt properties" }).click();
+
+    await page.getByRole("button", { name: "Source", exact: true }).click();
+    const editedSource = await page.getByRole("textbox", { name: "Mermaid source" }).inputValue();
+    assert.match(editedSource, /^\s*Billing Changeover :milestone, bill1, 2026-09-16, 0d$/m, "saving must canonicalise the visual milestone as one exact Mermaid date");
+  } finally {
+    if (await page.locator(".source-panel").count() === 0) await page.getByRole("button", { name: "Source", exact: true }).click();
+    await page.getByRole("textbox", { name: "Mermaid source" }).fill(originalSource);
+    await applyValidSourceAndWait();
+    await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+  }
+});
+
+test("a dependent Billing task keeps its selected explicit end date when weekends are excluded", { timeout: 60_000 }, async () => {
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Source", exact: true }).click();
+  const originalSource = await page.getByRole("textbox", { name: "Mermaid source" }).inputValue();
+  const ganttSource = [
+    "gantt",
+    "  dateFormat YYYY-MM-DD",
+    "  inclusiveEndDates",
+    "  excludes weekends",
+    "  section Billing",
+    "  Review :bill1, 2026-09-07, 2026-09-11",
+    "  Training :bill2, after bill1, 10d",
+  ].join("\n");
+  try {
+    await page.getByRole("textbox", { name: "Mermaid source" }).fill(ganttSource);
+    await applyValidSourceAndWait();
+    await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+    await page.locator(".view-switch button").filter({ hasText: "Mermaid" }).click();
+
+    await page.locator('text[id$="-bill2-text"]').click();
+    const properties = page.locator(".gantt-item-properties");
+    await properties.getByLabel("Ends on", { exact: true }).fill("2026-09-22");
+    await properties.getByRole("button", { name: "Apply Gantt properties" }).click();
+
+    await page.getByRole("button", { name: "Source", exact: true }).click();
+    const editedSource = await page.getByRole("textbox", { name: "Mermaid source" }).inputValue();
+    assert.match(editedSource, /^\s*Training :bill2, after bill1, 2026-09-22$/m, "the selected calendar endpoint must not be converted into an exclusion-expanded duration");
+  } finally {
+    if (await page.locator(".source-panel").count() === 0) await page.getByRole("button", { name: "Source", exact: true }).click();
+    await page.getByRole("textbox", { name: "Mermaid source" }).fill(originalSource);
+    await applyValidSourceAndWait();
+    await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+  }
+});
+
+test("an until-scheduled Gantt task exposes its target as a structured property", { timeout: 60_000 }, async () => {
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Source", exact: true }).click();
+  const originalSource = await page.getByRole("textbox", { name: "Mermaid source" }).inputValue();
+  const ganttSource = [
+    "gantt",
+    "  dateFormat YYYY-MM-DD",
+    "  inclusiveEndDates",
+    "  excludes weekends",
+    "  section Billing",
+    "  Training :bill1, 2026-08-15, until bill2",
+    "  Billing Changeover :milestone, bill2, 2026-09-01, 30d",
+  ].join("\n");
+  try {
+    await page.getByRole("textbox", { name: "Mermaid source" }).fill(ganttSource);
+    await applyValidSourceAndWait();
+    await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+    await page.locator(".view-switch button").filter({ hasText: "Mermaid" }).click();
+
+    await page.locator('text[id$="-bill1-text"]').click();
+    const properties = page.locator(".gantt-item-properties");
+    assert.match(await properties.getByRole("button", { name: "Until task" }).getAttribute("class"), /active/);
+    assert.equal(await properties.getByLabel("Start or dependency").inputValue(), "2026-08-15");
+    assert.equal(await properties.getByLabel("Runs until").locator("option:checked").textContent(), "bill2 · Billing Changeover");
+    await properties.getByLabel("Start or dependency").fill("2026-08-17");
+    const previousSvgId = await page.locator(".mermaid-render:not(.polished-render) svg").getAttribute("id");
+    await properties.getByRole("button", { name: "Apply Gantt properties" }).click();
+    await page.waitForFunction((previousId) => document.querySelector(".mermaid-render:not(.polished-render) svg")?.id !== previousId, previousSvgId);
+
+    const [trainingBox, milestoneBox] = await Promise.all([
+      page.locator('rect.task[data-source-line="5"]').boundingBox(),
+      page.locator('rect.task[data-source-line="6"]').boundingBox(),
+    ]);
+    assert.ok(trainingBox && milestoneBox, "the until task and milestone must both render");
+    assert.ok(Math.abs(trainingBox.x + trainingBox.width - (milestoneBox.x + milestoneBox.width / 2)) <= 3, "the until bar must finish at the visible milestone even when weekends are excluded");
+
+    await page.getByRole("button", { name: "Source", exact: true }).click();
+    const editedSource = await page.getByRole("textbox", { name: "Mermaid source" }).inputValue();
+    assert.match(editedSource, /^\s*Training :bill1, 2026-08-17, until bill2$/m);
+    assert.match(editedSource, /^\s*Billing Changeover :milestone, bill2, 2026-09-22, 0d$/m);
+  } finally {
+    if (await page.locator(".source-panel").count() === 0) await page.getByRole("button", { name: "Source", exact: true }).click();
+    await page.getByRole("textbox", { name: "Mermaid source" }).fill(originalSource);
+    await applyValidSourceAndWait();
+    await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+  }
+});
+
+test("a non-draggable Billing Training bar remains selectable and updates formatted source", { timeout: 60_000 }, async () => {
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Source", exact: true }).click();
+  const originalSource = await page.getByRole("textbox", { name: "Mermaid source" }).inputValue();
+  const ganttSource = [
+    "gantt",
+    " title Department training",
+    " dateFormat YYYY-MM-DD",
+    "section Shipping",
+    "Training:shipping-training,2026-08-03,5d",
+    " section Billing",
+    "  Training : billing-training, 2026-09-07,1M",
+  ].join("\n");
+  try {
+    const sourceEditor = page.getByRole("textbox", { name: "Mermaid source" });
+    await sourceEditor.fill(ganttSource);
+    await applyValidSourceAndWait();
+    assert.equal(await sourceEditor.inputValue(), [
+      "gantt",
+      "    title Department training",
+      "    dateFormat YYYY-MM-DD",
+      "    section Shipping",
+      "        Training :ship1, 2026-08-03, 5d",
+      "    section Billing",
+      "        Training :bill1, 2026-09-07, 1M",
+    ].join("\n"), "applying source must expose the canonical readable Gantt formatting immediately");
+    await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+    await page.locator(".view-switch button").filter({ hasText: "Mermaid" }).click();
+
+    const billingBar = page.locator('rect.task[data-source-line="6"]');
+    await billingBar.waitFor({ state: "visible" });
+    await billingBar.click({ position: { x: 5, y: 5 } });
+    const properties = page.locator(".gantt-item-properties");
+    await properties.waitFor({ state: "visible" });
+    assert.equal(await properties.getByLabel("Task ID Automatic").inputValue(), "bill1");
+    assert.equal(await properties.getByLabel("Start or dependency").inputValue(), "2026-09-07");
+    await properties.getByLabel("Task label").fill("Billing Training revised");
+    await properties.getByRole("button", { name: "Apply Gantt properties" }).click();
+
+    await page.getByRole("button", { name: "Source", exact: true }).click();
+    const editedSource = await page.getByRole("textbox", { name: "Mermaid source" }).inputValue();
+    assert.match(editedSource, /^ {8}Training :ship1, 2026-08-03, 5d$/m, "the Shipping task must remain unchanged");
+    assert.match(editedSource, /^ {8}Billing Training revised :bill1, 2026-09-07, 1M$/m, "the selected Billing task must update canonical source");
+  } finally {
+    if (await page.locator(".source-panel").count() === 0) await page.getByRole("button", { name: "Source", exact: true }).click();
+    await page.getByRole("textbox", { name: "Mermaid source" }).fill(originalSource);
+    await applyValidSourceAndWait();
+    await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
   }
 });
 
@@ -811,6 +1733,26 @@ test("invalid pasted source offers and applies only verified repair options", as
   await page.locator(".mermaid-render svg").waitFor({ state: "visible" });
 });
 
+test("empty flowchart node text is repaired to valid visually blank Mermaid", async () => {
+  await page.locator(".secondary-button").filter({ hasText: "Source" }).click();
+  await page.locator(".source-editor-wrap textarea").fill('flowchart TB\n  n80[""]\n  n81["Visible"]\n  n80 --> n81');
+  await page.locator(".source-panel .primary-button").filter({ hasText: "Apply to canvas" }).click();
+
+  const repairButton = page.locator(".inspector-footer button").filter({ hasText: "Repair Mermaid" });
+  await repairButton.waitFor({ state: "visible" });
+  await repairButton.click();
+  const repair = page.locator(".repair-option").filter({ hasText: "Repair empty node labels" });
+  await repair.waitFor({ state: "visible" });
+  await repair.getByRole("button", { name: "Apply verified fix" }).click();
+  await page.locator(".inspector-footer").filter({ hasText: "Valid Mermaid Flowchart" }).waitFor({ state: "visible" });
+  await page.locator(".mermaid-render svg").waitFor({ state: "visible" });
+  assert.equal(await page.locator(".mermaid-render-error").count(), 0);
+
+  await page.locator(".secondary-button").filter({ hasText: "Source" }).click();
+  assert.match(await page.locator(".source-editor-wrap textarea").inputValue(), /n80\[" "\]/);
+  await page.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+});
+
 test("Tidy Tree renders a compatible hierarchy in React", { timeout: 60_000 }, async () => {
   await page.getByRole("button", { name: "Style", exact: true }).click();
   const layoutSelect = page
@@ -836,6 +1778,7 @@ test("advanced flowcharts retain the spatial canvas, direction controls, and too
   B@{ shape: diam, label: "Ready?" }
   C["PB&S"]
   A --> B --> C
+  classDef default stroke:#8c52ff
   classDef important stroke:#8c52ff
   class B important
   click B "/details" "Open details"`;
@@ -864,6 +1807,9 @@ test("advanced flowcharts retain the spatial canvas, direction controls, and too
   await page.locator(".view-switch button").filter({ hasText: "Mermaid" }).click();
   await page.locator(".mermaid-render svg").waitFor({ state: "visible" });
   assert.equal(await page.locator(".mermaid-render-error").count(), 0, "source-preserving canvas edits must remain valid Mermaid");
+  const hitTargetStrokes = await page.locator(".mermaid-render .mermade-node-hit").evaluateAll((elements) =>
+    [...new Set(elements.map((element) => getComputedStyle(element).stroke))]);
+  assert.deepEqual(hitTargetStrokes, ["rgba(0, 0, 0, 0)"], "source-defined class styles must not reveal editor hit targets");
   await page.locator(".secondary-button").filter({ hasText: "Source" }).click();
   const updatedSource = await page.locator(".source-editor-wrap textarea").inputValue();
   assert.match(updatedSource, /^flowchart LR/m);

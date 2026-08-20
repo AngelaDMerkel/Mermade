@@ -64,3 +64,9 @@ test("detects declarations after Mermaid YAML frontmatter", async () => {
   const detected = detectDiagramType("---\ntitle: Example\n---\nsequenceDiagram\n  A->>B: Hello");
   assert.equal(detected?.id, "sequence");
 });
+
+test("new Gantt charts include their selected end date by default", async () => {
+  const { MERMAID_DIAGRAM_TYPES } = await loadTypeRegistry();
+  const gantt = MERMAID_DIAGRAM_TYPES.find((type) => type.id === "gantt");
+  assert.match(gantt.template, /^\s*inclusiveEndDates\s*$/m);
+});

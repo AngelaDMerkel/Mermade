@@ -1,7 +1,9 @@
 "use client";
 
 import {
+  ArrowDown,
   ArrowRight,
+  ArrowUp,
   AlertTriangle,
   BoxSelect,
   Check,
@@ -50,9 +52,12 @@ import {
   useState,
 } from "react";
 import { SemanticVisualEditor } from "./semantic-visual-editor";
+import { GanttCreateDialog } from "./gantt-create-dialog";
+import { GanttItemProperties } from "./gantt-item-properties";
+import { formatGanttSource, ganttExcludesWeekendsFromSource, ganttInclusiveEndDatesFromSource, ganttItemAtLine, ganttTaskSchedule, ganttWeekdayFromSource, GanttWeekday, moveGanttTaskInOrder, moveGanttTaskInTime, normaliseGanttTaskIds, parseGanttSource, resizeGanttTask, setGanttExcludeWeekends, setGanttInclusiveEndDates, setGanttWeekStart, snappedGanttDragDelta } from "./gantt-source";
 import { accessiblePolishedTextColour, DEFAULT_POLISHED_STYLE, normalisePolishedStyle, polishedTextRoles, POLISHED_THEME_OPTIONS, POLISHED_THEME_PREVIEWS, PolishedCustomColours, PolishedStyle, supportsPolishedDiagram } from "./beautiful-mermaid-config";
 import { layoutFlowchart } from "./flowchart-layout";
-import { appendFlowchartStatements, appendFlowchartSubgraph, canUseNativeFlowchartEditor, flowchartNodeIds, moveFlowchartNodeToSubgraph, removeFlowchartItems, updateFlowchartDirection, updateFlowchartEdgeStatement, updateFlowchartNodeStatement, updateFlowchartSubgraphStatement } from "./flowchart-source";
+import { appendFlowchartStatements, appendFlowchartSubgraph, flowchartNodeIds, flowchartRelationships, moveFlowchartNodeToSubgraph, parseFlowchartRelationshipLine, removeFlowchartItems, repairFlowchartEdgeEditArtifacts, updateFlowchartDirection, updateFlowchartEdgeStatement, updateFlowchartNodeStatement, updateFlowchartSubgraphStatement } from "./flowchart-source";
 import { layoutCompatibilityError } from "./layout-compatibility";
 import {
   createLocalDiagramId,
@@ -69,10 +74,11 @@ import { flowchartShapePatch, FLOWCHART_SHAPE_GROUPS, FlowchartVisualShape, merm
 import { diagramNameFromFile, MERMAID_IMPORT_ACCEPT, readImportedMermaid } from "./mermaid-import";
 import { helpForDiagram } from "./mermaid-help";
 import { decorateRenderedStatements, normalizeRenderedSvg, normalizeSvgMarkup } from "./mermaid-rendering";
-import { createRepairProposals, RepairProposal, RepairVersion } from "./mermaid-repair";
+import { createRepairProposals, repairEmptyFlowchartNodeLabels, RepairProposal, RepairVersion } from "./mermaid-repair";
 import { applyDiagramStyle, DEFAULT_DIAGRAM_STYLE, DiagramStyle, MermaidLayout, MermaidLook, MermaidTheme, readDiagramStyle } from "./mermaid-style";
 import { detectDiagramType, MERMAID_DIAGRAM_TYPES, visualModeLabel } from "./mermaid-types";
 import { renderTextDiagram, TextDiagramFormat } from "./unicode-export";
+import { bindRenderedFlowchartEdges } from "./rendered-edge-identity";
 
 type NodeShape = FlowchartVisualShape;
 type EdgeStyle = "solid" | "dashed" | "thick";
@@ -96,6 +102,16 @@ const BEAUTIFUL_COLOUR_ROLES: Array<[keyof PolishedCustomColours, string]> = [
   ["muted", "Muted text"],
   ["surface", "Node surface"],
   ["border", "Node border"],
+];
+
+const GANTT_WEEKDAY_OPTIONS: Array<{ value: GanttWeekday; label: string }> = [
+  { value: "monday", label: "Monday" },
+  { value: "tuesday", label: "Tuesday" },
+  { value: "wednesday", label: "Wednesday" },
+  { value: "thursday", label: "Thursday" },
+  { value: "friday", label: "Friday" },
+  { value: "saturday", label: "Saturday" },
+  { value: "sunday", label: "Sunday" },
 ];
 
 let beautifulWorkspacePromise: Promise<typeof import("./beautiful-mermaid")> | null = null;
@@ -132,6 +148,35 @@ const SOURCE_LINE_SELECTION_PREFIX = "source-line:";
 
 function sourceLineSelection(index: number) {
   return `${SOURCE_LINE_SELECTION_PREFIX}${index}`;
+}
+
+function hasDuplicateRelationshipIds(diagram: Diagram) {
+  const ids = diagram.edges.map((edge) => edge.id);
+  return new Set(ids).size !== ids.length;
+}
+
+function projectSourceBackedFlowchart(diagram: Diagram, source = diagram.source) {
+  if (!source || !/^\s*(?:---[\s\S]*?---\s*)?(?:flowchart|graph)\b/im.test(source)) return diagram;
+  const sourceBacked = { ...diagram, source };
+  const projected = parseMermaid(source, sourceBacked);
+  return projected ? { ...projected, source } : sourceBacked;
+}
+
+function normaliseStoredDiagram(diagram: Diagram) {
+  let normalisedDiagram = diagram;
+  if (diagram.source && /^\s*(?:---[\s\S]*?---\s*)?(?:flowchart|graph)\b/im.test(diagram.source)) {
+    const validLabels = repairEmptyFlowchartNodeLabels(diagram.source);
+    const repaired = repairFlowchartEdgeEditArtifacts(validLabels);
+    // Mermaid is authoritative for every source-backed flowchart. Persisted
+    // node positions and appearance remain useful inputs to the projection,
+    // but generated node/relationship ids must always be rebuilt from source.
+    // Otherwise an older cache can contain duplicate edge ids, causing two
+    // unrelated rendered paths to share one React selection identity.
+    normalisedDiagram = projectSourceBackedFlowchart(diagram, repaired.source);
+  }
+  if (!normalisedDiagram.source || !/^\s*gantt\b/im.test(normalisedDiagram.source)) return normalisedDiagram;
+  const normalised = formatGanttSource(normaliseGanttTaskIds(normalisedDiagram.source).source);
+  return normalised === normalisedDiagram.source ? normalisedDiagram : { ...normalisedDiagram, source: normalised };
 }
 
 function sourceLineFromSelection(value: string | undefined) {
@@ -179,7 +224,7 @@ function renderedInteractionElement(target: Element, diagram: Diagram) {
 }
 
 function toggleRenderedSelection(element: HTMLElement, selected: boolean) {
-  element.classList.toggle("selected", selected);
+  element.classList.toggle("mermade-selected", selected);
   if (!element.dataset.nodeId) return;
   element.querySelectorAll<SVGElement>(
     ":scope > rect:not(.mermade-node-hit), :scope > circle, :scope > ellipse, :scope > polygon, :scope > path, "
@@ -205,6 +250,20 @@ function toggleRenderedSelection(element: HTMLElement, selected: boolean) {
     if (stroke) shape.style.setProperty("stroke", stroke, strokePriority); else shape.style.removeProperty("stroke");
     if (strokeWidth) shape.style.setProperty("stroke-width", strokeWidth, strokeWidthPriority); else shape.style.removeProperty("stroke-width");
     delete shape.dataset.mermadeSelectionOutline;
+  });
+}
+
+function syncRenderedSelection(host: HTMLElement, diagram: Diagram, selectedIds: readonly string[]) {
+  const selectedSet = new Set(selectedIds);
+  // Include Mermade-selected elements even if Mermaid replaced or changed
+  // their identity metadata. This prevents a formerly selected path from
+  // retaining a visual highlight after the authoritative selection changes.
+  const elements = new Set(host.querySelectorAll<HTMLElement>(
+    ".mermade-selected, [data-node-id], [data-edge-id], [data-group-id], [data-source-line]",
+  ));
+  elements.forEach((element) => {
+    const id = renderedSelectionId(element, diagram);
+    toggleRenderedSelection(element, Boolean(id && selectedSet.has(id)));
   });
 }
 
@@ -236,6 +295,7 @@ type DiagramEdge = {
   label: string;
   style: EdgeStyle;
   arrow?: boolean;
+  sourceOccurrence?: number;
 };
 
 type DiagramGroup = { id: string; label: string };
@@ -246,6 +306,36 @@ type MarqueeSelection = {
   currentX: number;
   currentY: number;
   additive: boolean;
+};
+
+type GanttBarControls = {
+  lineIndex: number;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+};
+
+type GanttBarDrag = {
+  lineIndex: number;
+  mode: "move" | "start" | "end";
+  startClientX: number;
+  clientPixelsPerDay: number;
+  svgUnitsPerClientPixel: number;
+  originalX: number;
+  originalWidth: number;
+  originalControlLeft: number;
+  originalControlWidth: number;
+  deltaClientX: number;
+  deltaDays: number;
+  bar: SVGRectElement;
+  text: SVGTextElement | null;
+};
+
+type PendingGanttEdgeAnchor = {
+  lineIndex: number;
+  edge: "start" | "end" | "centre";
+  viewportX: number;
 };
 
 type PendingViewAnchor = {
@@ -431,10 +521,10 @@ async function loadMermaid(version: SupportedMermaidVersion, diagramTypeId?: str
   return mermaid;
 }
 
-async function renderMermaidSvg(mermaid: Awaited<ReturnType<typeof loadMermaid>>, id: string, source: string, renderProfileClass = "") {
+async function renderMermaidSvg(mermaid: Awaited<ReturnType<typeof loadMermaid>>, id: string, source: string, renderProfileClass = "", renderWidth = 1200) {
   const renderContainer = document.createElement("div");
   renderContainer.className = renderProfileClass;
-  renderContainer.style.cssText = "position:fixed;left:-100000px;top:0;visibility:hidden;pointer-events:none";
+  renderContainer.style.cssText = `position:fixed;left:-100000px;top:0;width:${renderWidth}px;visibility:hidden;pointer-events:none`;
   document.body.appendChild(renderContainer);
   try {
     return await mermaid.render(id, source, renderContainer);
@@ -477,7 +567,8 @@ const initialDiagram: Diagram = {
 const clone = (diagram: Diagram): Diagram => JSON.parse(JSON.stringify(diagram));
 
 function safeLabel(label: string) {
-  return label.replaceAll('"', "'").replaceAll("\n", " ");
+  const escaped = label.replaceAll('"', "'").replaceAll("\n", " ");
+  return escaped.trim() ? escaped : " ";
 }
 
 function nodeSyntax(node: DiagramNode) {
@@ -545,6 +636,7 @@ function parseMermaid(source: string, previous: Diagram): Diagram | null {
   const edges: DiagramEdge[] = [];
   const groups: DiagramGroup[] = [];
   const styles = new Map<string, { color: string; textColor: string }>();
+  const edgeOccurrences = new Map<string, number>();
   let currentGroup: string | undefined;
 
   const legacyPatterns: Array<[NodeShape, RegExp]> = [
@@ -581,7 +673,7 @@ function parseMermaid(source: string, previous: Diagram): Diagram | null {
   };
 
   const parseNode = (value: string, explicit = true) => {
-    const text = value.trim();
+    const text = value.trim().replace(/;$/, "").trimEnd();
     const expanded = text.match(/^([A-Za-z_][\w-]*)@\{\s*(.*?)\s*\}$/);
     if (expanded) {
       const shape = expanded[2].match(/\bshape\s*:\s*["']?([\w-]+)["']?/)?.[1] || "rect";
@@ -606,38 +698,26 @@ function parseMermaid(source: string, previous: Diagram): Diagram | null {
 
   const addParsedEdge = (fromExpression: string, connector: string, toExpression: string, label = "") => {
     const from = parseNode(fromExpression);
-    const targets = toExpression.split(/\s+&\s+/).map((target) => parseNode(target)).filter((id): id is string => Boolean(id));
-    if (!from || !targets.length) return;
-    for (const to of targets) {
-      edges.push({
-        id: `e${edges.length + 1}`,
-        from,
-        to,
-        label,
-        style: connector.startsWith("-.") ? "dashed" : connector.startsWith("==") ? "thick" : "solid",
-        arrow: connector.includes(">"),
-      });
-    }
+    const to = parseNode(toExpression);
+    if (!from || !to) return;
+    const endpointKey = `${from}\u0000${to}`;
+    const sourceOccurrence = edgeOccurrences.get(endpointKey) || 0;
+    edgeOccurrences.set(endpointKey, sourceOccurrence + 1);
+    edges.push({
+      id: `e${edges.length + 1}`,
+      from,
+      to,
+      label,
+      style: connector.includes("==") ? "thick" : /-\.+/.test(connector) ? "dashed" : "solid",
+      arrow: connector.includes(">"),
+      sourceOccurrence,
+    });
   };
 
   const parseEdgeLine = (line: string) => {
-    const connectorPattern = /(--\s*"([^"]*)"\s*-->|(?:-->|---)\|"?([^|]*?)"?\||-\.->|-\.-|==>|===|-->|---)/g;
-    const connectors = [...line.matchAll(connectorPattern)];
-    if (!connectors.length) return false;
-    const operands: string[] = [];
-    let start = 0;
-    for (const connector of connectors) {
-      operands.push(line.slice(start, connector.index).trim());
-      start = (connector.index || 0) + connector[0].length;
-    }
-    operands.push(line.slice(start).trim());
-    if (operands.length !== connectors.length + 1) return false;
-    connectors.forEach((connector, index) => addParsedEdge(
-      operands[index],
-      connector[1],
-      operands[index + 1],
-      connector[2] || connector[3] || "",
-    ));
+    const relationship = parseFlowchartRelationshipLine(line);
+    if (!relationship) return false;
+    relationship.edges.forEach((edge) => addParsedEdge(edge.fromExpression, edge.connector, edge.toExpression, edge.label));
     return true;
   };
 
@@ -791,9 +871,11 @@ export function MermaidEditor() {
   const [repairLoading, setRepairLoading] = useState(false);
   const [repairOptions, setRepairOptions] = useState<RepairProposal[]>([]);
   const [welcomeOpen, setWelcomeOpen] = useState(false);
+  const [ganttCreateOpen, setGanttCreateOpen] = useState(false);
   const [tourStep, setTourStep] = useState<number | null>(null);
   const [tourRect, setTourRect] = useState<DOMRect | null>(null);
   const [marquee, setMarquee] = useState<MarqueeSelection | null>(null);
+  const [ganttBarControls, setGanttBarControls] = useState<GanttBarControls | null>(null);
   const history = useRef<Diagram[]>([]);
   const future = useRef<Diagram[]>([]);
   const boardRef = useRef<HTMLDivElement>(null);
@@ -805,6 +887,9 @@ export function MermaidEditor() {
   const dragRef = useRef<null | { startX: number; startY: number; nodes: Map<string, { x: number; y: number }> }>(null);
   const marqueeRef = useRef<MarqueeSelection | null>(null);
   const marqueeSurfaceRef = useRef<HTMLDivElement | null>(null);
+  const ganttBarDragRef = useRef<GanttBarDrag | null>(null);
+  const ganttDragCleanupRef = useRef<(() => void) | null>(null);
+  const pendingGanttEdgeAnchorRef = useRef<PendingGanttEdgeAnchor | null>(null);
   const edgeCounter = useRef(initialDiagram.edges.length + 1);
   const mermaidRenderCounter = useRef(0);
   const selectedRef = useRef(selected);
@@ -817,6 +902,7 @@ export function MermaidEditor() {
   const typeMenuRef = useRef<HTMLDivElement>(null);
   const localDiagramMenuRef = useRef<HTMLDivElement>(null);
   const documentNameRef = useRef<HTMLInputElement>(null);
+  const edgeLabelInputRef = useRef<HTMLInputElement>(null);
   const localDiagramIndexRef = useRef<LocalDiagramIndex>({ version: 1, activeId: "", documents: [] });
   const localDiagramCacheRef = useRef(new Map<string, Diagram>());
   const importInputRef = useRef<HTMLInputElement>(null);
@@ -906,10 +992,31 @@ export function MermaidEditor() {
   const selectedGroup = selected.length === 1 ? diagram.groups.find((group) => group.id === selected[0]) : undefined;
   const selectedSourceLine = sourceLineFromSelection(selected[0]);
   const selectedSourceStatement = selectedSourceLine >= 0 ? source.split(/\r?\n/)[selectedSourceLine] : undefined;
+  const selectedGanttItem = activeDiagramType.id === "gantt" && selectedSourceLine >= 0
+    ? ganttItemAtLine(source, selectedSourceLine)
+    : undefined;
+  const ganttWeekStart = activeDiagramType.id === "gantt" ? ganttWeekdayFromSource(source) : "sunday";
+  const ganttExcludesWeekends = activeDiagramType.id === "gantt" && ganttExcludesWeekendsFromSource(source);
+  const ganttInclusiveEndDates = activeDiagramType.id === "gantt" && ganttInclusiveEndDatesFromSource(source);
+  const ganttCreateDefaults = useMemo(() => {
+    const document = parseGanttSource(source);
+    const sectionLineIndex = selectedGanttItem?.kind === "section"
+      ? selectedGanttItem.lineIndex
+      : selectedGanttItem?.kind === "task"
+        ? selectedGanttItem.sectionLineIndex
+        : document.sections.at(-1)?.lineIndex ?? null;
+    const order = selectedGanttItem?.kind === "task"
+      ? selectedGanttItem.order + 1
+      : document.tasks.filter((task) => task.sectionLineIndex === sectionLineIndex).length + 1;
+    return { sectionLineIndex, order };
+  }, [selectedGanttItem, source]);
   const statusSource = invalidSource || source;
   const statusDiagramType = detectDiagramType(statusSource) || activeDiagramType;
   const diagramError = syntaxError || mermaidRenderError;
   const nodeById = useMemo(() => new Map(diagram.nodes.map((node) => [node.id, node])), [diagram.nodes]);
+  const selectedNodeRelationships = selectedNode
+    ? diagram.edges.filter((edge) => edge.from === selectedNode.id || edge.to === selectedNode.id)
+    : [];
   const groupBoundsById = useMemo(() => {
     const extents = new Map<string, { minX: number; minY: number; maxX: number; maxY: number }>();
     for (const node of diagram.nodes) {
@@ -969,12 +1076,13 @@ export function MermaidEditor() {
   }, [replaceLocalDiagramIndex]);
 
   const resetEditorForLocalDiagram = useCallback((next: Diagram) => {
+    const normalisedNext = normaliseStoredDiagram(next);
     history.current = [];
     future.current = [];
-    diagramRef.current = next;
-    setDiagram(next);
-    setSelected(next.nodes[0] ? [next.nodes[0].id] : []);
-    edgeCounter.current = Math.max(0, ...next.edges.map((edge) => Number(edge.id.match(/^e(\d+)$/)?.[1]) || 0)) + 1;
+    diagramRef.current = normalisedNext;
+    setDiagram(normalisedNext);
+    setSelected(normalisedNext.nodes[0] ? [normalisedNext.nodes[0].id] : []);
+    edgeCounter.current = Math.max(0, ...normalisedNext.edges.map((edge) => Number(edge.id.match(/^e(\d+)$/)?.[1]) || 0)) + 1;
     setConnectionStart(null);
     setEditingNode(null);
     setEditingGroup(null);
@@ -994,7 +1102,7 @@ export function MermaidEditor() {
     shouldFitMermaidRef.current = true;
     shouldFitPolishedRef.current = true;
     shouldFitFreeformRef.current = true;
-    const targetSource = next.source ?? applyDiagramStyle(toMermaid(next), next.style || DEFAULT_DIAGRAM_STYLE);
+    const targetSource = normalisedNext.source ?? applyDiagramStyle(toMermaid(normalisedNext), normalisedNext.style || DEFAULT_DIAGRAM_STYLE);
     const targetType = detectDiagramType(targetSource);
     if (viewMode === "polished" && targetType && !supportsPolishedDiagram(targetType.id)) {
       setViewMode("mermaid");
@@ -1102,6 +1210,22 @@ export function MermaidEditor() {
     diagramRef.current = diagram;
   }, [diagram]);
 
+  useEffect(() => {
+    if (!diagram.source || !hasDuplicateRelationshipIds(diagram)) return;
+    let cancelled = false;
+    // Repair stale in-memory caches as well as persisted diagrams. Deferring
+    // the update avoids a synchronous effect cascade while ensuring Fast
+    // Refresh and long-lived tabs cannot retain colliding relationship ids.
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setDiagram((current) => hasDuplicateRelationshipIds(current) ? projectSourceBackedFlowchart(current) : current);
+      setSelected([]);
+    });
+    return () => { cancelled = true; };
+  }, [diagram]);
+
+  useEffect(() => () => ganttDragCleanupRef.current?.(), []);
+
   const restoreViewAnchor = useCallback((targetView: CanvasView) => {
     const pending = pendingViewAnchorRef.current;
     const scroller = scrollRef.current;
@@ -1157,7 +1281,7 @@ export function MermaidEditor() {
     let storageAvailable = false;
     try {
       const library = initialiseLocalDiagramLibrary(localStorage, restored, restored.name);
-      restored = restoreStoredDiagram(library.document?.diagram) ?? restored;
+      restored = normaliseStoredDiagram(restoreStoredDiagram(library.document?.diagram) ?? restored);
       index = library.index;
       storageAvailable = library.storageAvailable;
     } catch {
@@ -1394,7 +1518,10 @@ export function MermaidEditor() {
         const renderId = `mermade-view-${mermaidRenderCounter.current++}`;
         // Use a temporary non-React container. Block Diagram measures live DOM,
         // while its debug serialisation cannot traverse React's circular metadata.
-        const { svg } = await renderMermaidSvg(mermaid, renderId, source, renderProfileClass);
+        const ganttRenderWidth = activeDiagramType.id === "gantt"
+          ? Math.max(1600, scrollRef.current?.clientWidth || 0)
+          : 1200;
+        const { svg } = await renderMermaidSvg(mermaid, renderId, source, renderProfileClass, ganttRenderWidth);
         if (cancelled) return;
 
         host.innerHTML = svg;
@@ -1407,7 +1534,14 @@ export function MermaidEditor() {
         const width = Math.max(480, Math.ceil(viewBox?.width || 1200));
         const height = Math.max(320, Math.ceil(viewBox?.height || 800));
 
-        const renderedDiagram = diagramRef.current;
+        // Bind interaction identities from the exact Mermaid document that
+        // produced this SVG. The persisted visual projection may briefly be
+        // stale during restoration or Fast Refresh, but it must never make
+        // two source relationships share one selectable identity.
+        const currentDiagram = diagramRef.current;
+        const renderedDiagram = activeDiagramType.id === "flowchart"
+          ? projectSourceBackedFlowchart(currentDiagram, source)
+          : currentDiagram;
         const nodeIds = [...new Set([
           ...renderedDiagram.nodes.map((node) => node.id),
           ...(activeDiagramType.id === "flowchart" ? flowchartNodeIds(source) : []),
@@ -1421,24 +1555,8 @@ export function MermaidEditor() {
           const id = groupIds.find((groupId) => element.id === groupId || element.id.endsWith(`-${groupId}`));
           if (id) element.dataset.groupId = id;
         });
-        host.querySelectorAll<HTMLElement>(".edgePaths path").forEach((element, index) => {
-          const edge = renderedDiagram.edges[index];
-          if (!edge) return;
-          element.dataset.edgeId = edge.id;
-          const hitTarget = element.cloneNode(false) as HTMLElement;
-          hitTarget.removeAttribute("id");
-          hitTarget.dataset.edgeId = edge.id;
-          hitTarget.classList.add("mermaid-edge-hit");
-          element.parentNode?.insertBefore(hitTarget, element);
-        });
-        host.querySelectorAll<HTMLElement>(".edgeLabels .edgeLabel").forEach((element, index) => {
-          const edge = renderedDiagram.edges[index];
-          if (edge) element.dataset.edgeId = edge.id;
-        });
-        host.querySelectorAll<HTMLElement>("[data-node-id], [data-edge-id], [data-group-id], [data-source-line]").forEach((element) => {
-          const id = renderedSelectionId(element, diagramRef.current);
-          toggleRenderedSelection(element, Boolean(id && selectedRef.current.includes(id)));
-        });
+        bindRenderedFlowchartEdges(host, renderedDiagram.edges);
+        syncRenderedSelection(host, renderedDiagram, selectedRef.current);
 
         setMermaidSize({ width, height });
         setMermaidRenderRevision((revision) => revision + 1);
@@ -1499,9 +1617,7 @@ export function MermaidEditor() {
           const edge = diagramRef.current.edges[index];
           if (edge) element.dataset.edgeId = edge.id;
         });
-        host.querySelectorAll<HTMLElement>("[data-node-id], [data-edge-id], [data-group-id], [data-source-line]").forEach((element) => {
-          toggleRenderedSelection(element, false);
-        });
+        syncRenderedSelection(host, diagramRef.current, []);
 
         setPolishedSize({ width, height });
         setPolishedRenderRevision((revision) => revision + 1);
@@ -1582,11 +1698,59 @@ export function MermaidEditor() {
     if (viewMode !== "mermaid") return;
     const host = mermaidViewRef.current;
     if (!host) return;
-    host.querySelectorAll<HTMLElement>("[data-node-id], [data-edge-id], [data-group-id], [data-source-line]").forEach((element) => {
-      const id = renderedSelectionId(element, diagramRef.current);
-      toggleRenderedSelection(element, Boolean(id && selected.includes(id)));
-    });
+    syncRenderedSelection(host, diagramRef.current, selected);
   }, [mermaidSize, polishedSize, selected, viewMode]);
+
+  useLayoutEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      const selectedItem = selectedSourceLine >= 0 ? ganttItemAtLine(source, selectedSourceLine) : undefined;
+      if (viewMode !== "mermaid" || activeDiagramType.id !== "gantt" || !selectedItem || selectedItem.kind !== "task") {
+        setGanttBarControls(null);
+        return;
+      }
+      const stage = mermaidStageRef.current;
+      const host = mermaidViewRef.current;
+      const bar = host?.querySelector<SVGRectElement>(`rect.task[data-source-line="${selectedItem.lineIndex}"]`);
+      const surface = stage?.parentElement;
+      if (!stage || !surface || !bar) {
+        setGanttBarControls(null);
+        return;
+      }
+      const surfaceRect = surface.getBoundingClientRect();
+      const barRect = bar.getBoundingClientRect();
+      setGanttBarControls({
+        lineIndex: selectedItem.lineIndex,
+        left: barRect.left - surfaceRect.left,
+        top: barRect.top - surfaceRect.top,
+        width: barRect.width,
+        height: barRect.height,
+      });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [activeDiagramType.id, mermaidRenderRevision, selectedSourceLine, source, viewMode, zoom]);
+
+  useLayoutEffect(() => {
+    const pending = pendingGanttEdgeAnchorRef.current;
+    if (!pending || viewMode !== "mermaid" || activeDiagramType.id !== "gantt") return;
+    const frame = requestAnimationFrame(() => {
+      const scroller = scrollRef.current;
+      const bar = mermaidViewRef.current?.querySelector<SVGRectElement>(`rect.task[data-source-line="${pending.lineIndex}"]`);
+      if (!scroller || !bar) {
+        pendingGanttEdgeAnchorRef.current = null;
+        return;
+      }
+      const scrollerRect = scroller.getBoundingClientRect();
+      const barRect = bar.getBoundingClientRect();
+      const currentX = pending.edge === "start"
+        ? barRect.left
+        : pending.edge === "end"
+          ? barRect.right
+          : barRect.left + barRect.width / 2;
+      scroller.scrollLeft += currentX - scrollerRect.left - pending.viewportX;
+      pendingGanttEdgeAnchorRef.current = null;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [activeDiagramType.id, mermaidRenderRevision, viewMode]);
 
   useEffect(() => {
     if (viewMode !== "free" || pendingViewAnchorRef.current?.targetView !== "free") return;
@@ -1658,12 +1822,17 @@ export function MermaidEditor() {
       const previous = current.edges.find((edge) => edge.id === id);
       const edges = current.edges.map((edge) => edge.id === id ? { ...edge, ...patch } : edge);
       const updated = edges.find((edge) => edge.id === id);
+      const nextSource = current.source && previous && updated
+        ? updateFlowchartEdgeStatement(current.source, previous.from, previous.to, edgeSyntax(updated), previous.sourceOccurrence || 0)
+        : current.source;
+      if (nextSource && nextSource !== current.source) {
+        const projected = parseMermaid(nextSource, { ...current, source: nextSource });
+        if (projected) return { ...projected, source: nextSource };
+      }
       return {
         ...current,
         edges,
-        source: current.source && previous && updated
-          ? updateFlowchartEdgeStatement(current.source, previous.from, previous.to, edgeSyntax(updated))
-          : current.source,
+        source: nextSource,
       };
     };
     if (save) commit(apply); else setDiagram(apply);
@@ -1676,6 +1845,14 @@ export function MermaidEditor() {
       source: current.source ? updateFlowchartSubgraphStatement(current.source, id, label) : current.source,
     });
     if (save) commit(apply); else setDiagram(apply);
+  };
+
+  const focusEdgeLabel = () => {
+    setTab("properties");
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      edgeLabelInputRef.current?.focus();
+      edgeLabelInputRef.current?.select();
+    }));
   };
 
   const assignNodeToSubgraph = async (nodeId: string, targetSubgraphId: string) => {
@@ -1734,7 +1911,14 @@ export function MermaidEditor() {
       textColor: "#24232a",
     };
     const edge: DiagramEdge | undefined = origin
-      ? { id: `e${edgeCounter.current++}`, from: origin.id, to: id, label: "", style: "solid" }
+      ? {
+        id: `e${edgeCounter.current++}`,
+        from: origin.id,
+        to: id,
+        label: "",
+        style: "solid",
+        sourceOccurrence: diagram.edges.filter((candidate) => candidate.from === origin.id && candidate.to === id).length,
+      }
       : undefined;
     commit((current) => ({
       ...current,
@@ -1747,6 +1931,13 @@ export function MermaidEditor() {
     setSelected([id]);
     setEditingNode(id);
     if (edge) notify("Connected step created");
+  };
+
+  const openGanttCreate = () => {
+    setGanttCreateOpen(true);
+    setSettingsOpen(false);
+    setShortcutsOpen(false);
+    setHelpOpen(false);
   };
 
   const deleteSelected = async () => {
@@ -1773,7 +1964,43 @@ export function MermaidEditor() {
       candidate = candidate.split(/\r?\n/).filter((_, index) => !removedLines.has(index)).join("\n");
     }
     if (candidate !== undefined) {
+      const beforeNodeIds = activeDiagramType.id === "flowchart" ? flowchartNodeIds(candidate) : new Set<string>();
+      const relationshipCounts = (value: string) => {
+        const counts = new Map<string, number>();
+        flowchartRelationships(value).forEach((edge) => {
+          const key = `${edge.from}\u0000${edge.to}`;
+          counts.set(key, (counts.get(key) || 0) + 1);
+        });
+        return counts;
+      };
+      const beforeRelationshipCounts = selectedEdges.length ? relationshipCounts(candidate) : new Map<string, number>();
       candidate = removeFlowchartItems(candidate, { nodeIds, edges: selectedEdges, subgraphIds });
+      if (selectedEdges.length) {
+        const afterRelationshipCounts = relationshipCounts(candidate);
+        const expectedRemovals = new Map<string, number>();
+        selectedEdges.forEach((edge) => {
+          const key = `${edge.from}\u0000${edge.to}`;
+          expectedRemovals.set(key, (expectedRemovals.get(key) || 0) + 1);
+        });
+        const unresolved = [...expectedRemovals].some(([key, expected]) => (
+          (afterRelationshipCounts.get(key) || 0) > (beforeRelationshipCounts.get(key) || 0) - expected
+        ));
+        if (unresolved) {
+          notify("Mermade could not match that rendered relationship to its Mermaid statement; no source was changed");
+          return;
+        }
+        // An edge-only transaction is never authorised to remove a node. This
+        // is deliberately checked against the Mermaid document rather than the
+        // visual projection, so an identity/parser regression fails closed.
+        if (!nodeIds.length) {
+          const afterNodeIds = flowchartNodeIds(candidate);
+          const missingNodeIds = [...beforeNodeIds].filter((id) => !afterNodeIds.has(id));
+          if (missingNodeIds.length) {
+            notify("Mermade stopped the deletion because it would also remove a node; no source was changed");
+            return;
+          }
+        }
+      }
       const error = await validateSource(candidate, activeMermaidVersion);
       if (error) {
         notify(`Mermaid could not safely delete that selection: ${error}`);
@@ -1781,15 +2008,24 @@ export function MermaidEditor() {
       }
     }
 
-    commit((current) => ({
-      ...current,
-      edges: current.edges.filter((edge) => !ids.has(edge.id) && !ids.has(edge.from) && !ids.has(edge.to)),
-      groups: current.groups.filter((group) => !ids.has(group.id)),
-      source: candidate,
-      nodes: current.nodes
-        .filter((node) => !ids.has(node.id))
-        .map((node) => node.groupId && ids.has(node.groupId) ? { ...node, groupId: undefined } : node),
-    }));
+    commit((current) => {
+      const updated = {
+        ...current,
+        edges: current.edges.filter((edge) => !ids.has(edge.id) && !ids.has(edge.from) && !ids.has(edge.to)),
+        groups: current.groups.filter((group) => !ids.has(group.id)),
+        source: candidate,
+        nodes: current.nodes
+          .filter((node) => !ids.has(node.id))
+          .map((node) => node.groupId && ids.has(node.groupId) ? { ...node, groupId: undefined } : node),
+      };
+      // Mermaid is the sole source of truth. Deleting a relationship changes
+      // source order, so sequential visual ids must be rebuilt immediately;
+      // retaining the pre-delete projection can make the next action address
+      // a different relationship or node.
+      return candidate && activeDiagramType.id === "flowchart"
+        ? projectSourceBackedFlowchart(updated, candidate)
+        : updated;
+    });
     setSelected([]);
     notify("Selection deleted from the canvas and Mermaid source");
   };
@@ -1945,7 +2181,7 @@ export function MermaidEditor() {
 
   const editSelectedText = () => {
     if (selected.length !== 1) {
-      notify("Select one node to edit its text");
+      notify("Select one node or relationship to edit its text");
       return;
     }
     const node = diagram.nodes.find((candidate) => candidate.id === selected[0]);
@@ -1955,6 +2191,14 @@ export function MermaidEditor() {
       setEditingNode(node.id);
       return;
     }
+    const edge = diagram.edges.find((candidate) => candidate.id === selected[0]);
+    if (edge) {
+      setEditingNode(null);
+      setEditingGroup(null);
+      setEditingSourceLine(null);
+      focusEdgeLabel();
+      return;
+    }
     if (viewMode !== "free" && selectedSourceStatement !== undefined) {
       setEditingNode(null);
       setEditingGroup(null);
@@ -1962,7 +2206,7 @@ export function MermaidEditor() {
       setEditingSourceStatement(selectedSourceStatement);
       return;
     }
-    notify("Select one node to edit its text");
+    notify("Select one node or relationship to edit its text");
   };
 
   useEffect(() => {
@@ -1989,6 +2233,7 @@ export function MermaidEditor() {
         setShortcutsOpen(false);
         setHelpOpen(false);
         setRepairOpen(false);
+        setGanttCreateOpen(false);
         setTourStep(null);
         if (welcomeOpen) {
           writeStoredValue(ONBOARDING_KEY, "complete");
@@ -2003,7 +2248,7 @@ export function MermaidEditor() {
       }
       if (editing || event.metaKey || event.ctrlKey || event.altKey || event.repeat) return;
 
-      if (key === "1" || key === "2" || key === "3") {
+      if (key === "1" || key === "2" || (key === "3" && polishedSupported)) {
         event.preventDefault();
         if (key === "3") switchWorkspace("beautiful");
         else switchCanvasView(key === "1" ? "free" : "mermaid");
@@ -2020,6 +2265,18 @@ export function MermaidEditor() {
       if (key === "e") {
         event.preventDefault();
         editSelectedText();
+        return;
+      }
+
+      if (activeDiagramType.id === "gantt" && key === "n") {
+        event.preventDefault();
+        openGanttCreate();
+        return;
+      }
+
+      if (activeDiagramType.id === "gantt" && selectedGanttItem?.kind === "task" && (key === "arrowup" || key === "arrowdown")) {
+        event.preventDefault();
+        void moveSelectedGanttTask(key === "arrowup" ? -1 : 1);
         return;
       }
 
@@ -2118,7 +2375,14 @@ export function MermaidEditor() {
       setConnectionStart(id);
       notify("Choose the destination node");
     } else if (connectionStart !== id) {
-      const newEdge: DiagramEdge = { id: `e${edgeCounter.current++}`, from: connectionStart, to: id, label: "", style: "solid" };
+      const newEdge: DiagramEdge = {
+        id: `e${edgeCounter.current++}`,
+        from: connectionStart,
+        to: id,
+        label: "",
+        style: "solid",
+        sourceOccurrence: diagram.edges.filter((edge) => edge.from === connectionStart && edge.to === id).length,
+      };
       commit((current) => ({
         ...current,
         edges: [...current.edges, newEdge],
@@ -2176,10 +2440,12 @@ export function MermaidEditor() {
     }
     const nodeId = element?.dataset.nodeId;
     const groupId = element?.dataset.groupId;
+    const edgeId = element?.dataset.edgeId;
     const sourceLine = Number(element?.dataset.sourceLine);
     const modelNode = nodeId ? diagram.nodes.find((node) => node.id === nodeId) : undefined;
     const modelGroup = groupId ? diagram.groups.find((group) => group.id === groupId) : undefined;
-    if (!modelNode && !modelGroup && (element.dataset.sourceLine === undefined || !Number.isInteger(sourceLine))) {
+    const modelEdge = edgeId ? diagram.edges.find((edge) => edge.id === edgeId) : undefined;
+    if (!modelNode && !modelGroup && !modelEdge && (element.dataset.sourceLine === undefined || !Number.isInteger(sourceLine))) {
       event.stopPropagation();
       openSourceEditor();
       return;
@@ -2190,6 +2456,12 @@ export function MermaidEditor() {
       setEditingNode(modelNode.id);
       setEditingGroup(null);
       setEditingSourceLine(null);
+    } else if (modelEdge) {
+      setSelected([modelEdge.id]);
+      setEditingNode(null);
+      setEditingGroup(null);
+      setEditingSourceLine(null);
+      focusEdgeLabel();
     } else if (modelGroup) {
       setSelected([modelGroup.id]);
       setEditingGroup(modelGroup.id);
@@ -2254,7 +2526,7 @@ export function MermaidEditor() {
     try {
       const mermaid = await loadMermaid(activeMermaidVersion, activeDiagramType.id, diagramStyle.layout);
       mermaid.initialize({ startOnLoad: false, securityLevel: "strict", flowchart: { htmlLabels: true, curve: "basis" } });
-      const { svg } = await renderMermaidSvg(mermaid, `mermade-${Date.now()}`, source, renderProfileClass);
+      const { svg } = await renderMermaidSvg(mermaid, `mermade-${Date.now()}`, source, renderProfileClass, activeDiagramType.id === "gantt" ? 1600 : 1200);
       download(normalizeSvgMarkup(svg, activeDiagramType.id, source), `${diagram.name.toLowerCase().replace(/\W+/g, "-")}.svg`, "image/svg+xml");
       setExportOpen(false);
       notify("SVG exported");
@@ -2321,16 +2593,18 @@ export function MermaidEditor() {
     }
   }
 
-  const validateAndCommitSource = async (candidate: string, versionOverride?: SupportedMermaidVersion) => {
-    const detection = detectMermaidVersion(candidate);
+  const validateAndCommitSource = async (candidate: string, versionOverride?: SupportedMermaidVersion, preserveViewport = false) => {
+    const candidateType = detectDiagramType(candidate);
+    const preparedCandidate = candidateType?.id === "gantt" ? formatGanttSource(normaliseGanttTaskIds(candidate).source) : candidate;
+    const detection = detectMermaidVersion(preparedCandidate);
     const versionPreference = versionOverride || diagram.mermaidVersion || "auto";
     if (versionPreference === "10.9.6" && detection.minimum === "11.3.0") {
       return { ok: false, error: "This source requires Mermaid 11.3+; choose Auto-detect or 11.16.0 in Settings" };
     }
 
-    const detectedType = detectDiagramType(candidate);
+    const detectedType = detectDiagramType(preparedCandidate);
     if (!detectedType) return { ok: false, error: "This Mermaid diagram type is not registered in Mermade" };
-    const nextStyle = readDiagramStyle(candidate);
+    const nextStyle = readDiagramStyle(preparedCandidate);
     if (nextStyle.layout === "cose-bilkent" && detectedType.id !== "mindmap") {
       return { ok: false, error: "Cose Bilkent currently renders only Mindmaps reliably in Mermaid 11.16; choose Dagre, ELK, or Tidy Tree for this diagram" };
     }
@@ -2339,13 +2613,14 @@ export function MermaidEditor() {
       const version = versionPreference === "auto" ? detection.recommended : versionPreference;
       const mermaid = await loadMermaid(version, detectedType.id, nextStyle.layout);
       mermaid.initialize({ startOnLoad: false, securityLevel: "strict" });
-      await mermaid.parse(candidate);
+      await mermaid.parse(preparedCandidate);
 
-      const parsedFlowchart = detectedType.id === "flowchart" ? parseMermaid(candidate, diagram) : null;
-      const preserveFlowchartSource = Boolean(parsedFlowchart && !canUseNativeFlowchartEditor(candidate));
-      if (parsedFlowchart) shouldFitFreeformRef.current = true;
-      shouldFitMermaidRef.current = true;
-      shouldFitPolishedRef.current = true;
+      const parsedFlowchart = detectedType.id === "flowchart" ? parseMermaid(preparedCandidate, diagram) : null;
+      if (!preserveViewport) {
+        if (parsedFlowchart) shouldFitFreeformRef.current = true;
+        shouldFitMermaidRef.current = true;
+        shouldFitPolishedRef.current = true;
+      }
       setTool("select");
       setConnectionStart(null);
       setEditingNode(null);
@@ -2354,13 +2629,16 @@ export function MermaidEditor() {
       commit((current) => parsedFlowchart ? {
         ...parsedFlowchart,
         name: current.name,
-        source: preserveFlowchartSource ? candidate : undefined,
+        // Validated Mermaid remains authoritative after paste, import, repair,
+        // or direct source editing. The visual model is a projection used by
+        // the canvases; visual operations patch this source in place.
+        source: preparedCandidate,
         style: nextStyle,
         mermaidVersion: versionOverride || current.mermaidVersion,
         detectedMermaidVersion: detection.recommended,
       } : {
         ...current,
-        source: candidate,
+        source: preparedCandidate,
         style: nextStyle,
         mermaidVersion: versionOverride || current.mermaidVersion,
         nodes: [],
@@ -2375,7 +2653,7 @@ export function MermaidEditor() {
         lastEditorViewRef.current = "mermaid";
         setViewMode("mermaid");
       }
-      return { ok: true };
+      return { ok: true, source: preparedCandidate };
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : "Mermaid rejected this source" };
     }
@@ -2400,6 +2678,197 @@ export function MermaidEditor() {
     notify("Mermaid statement updated");
   };
 
+  const applyGanttItemEdit = async (candidate: string, selectedLine: number) => {
+    const result = await validateAndCommitSource(candidate);
+    if (result.ok) {
+      setSelected([sourceLineSelection(selectedLine)]);
+      notify("Gantt item updated");
+    }
+    return result;
+  };
+
+  const createGanttItem = async (candidate: string, selectedLine: number) => {
+    const result = await validateAndCommitSource(candidate);
+    if (result.ok) {
+      setSelected([sourceLineSelection(selectedLine)]);
+      setGanttCreateOpen(false);
+      notify("Gantt item created");
+    }
+    return result;
+  };
+
+  const resetGanttDragPreview = (drag: GanttBarDrag) => {
+    drag.bar.setAttribute("x", String(drag.originalX));
+    drag.bar.setAttribute("width", String(drag.originalWidth));
+    drag.bar.style.removeProperty("transform");
+    drag.text?.style.removeProperty("transform");
+    setGanttBarControls((current) => current && current.lineIndex === drag.lineIndex ? { ...current, left: drag.originalControlLeft, width: drag.originalControlWidth } : current);
+  };
+
+  const beginGanttBarDrag = (event: ReactPointerEvent<HTMLElement>, lineIndex: number, mode: GanttBarDrag["mode"], suppliedBar?: SVGRectElement) => {
+    const bar = suppliedBar || mermaidViewRef.current?.querySelector<SVGRectElement>(`rect.task[data-source-line="${lineIndex}"]`);
+    const schedule = ganttTaskSchedule(source, lineIndex);
+    const surface = mermaidStageRef.current?.parentElement;
+    if (!bar || !surface) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setSelected([sourceLineSelection(lineIndex)]);
+    if (!schedule || schedule.durationDays <= 0) {
+      notify("Direct dragging requires a YYYY-MM-DD Gantt schedule");
+      return;
+    }
+    ganttDragCleanupRef.current?.();
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // Window-level tracking below does not depend on pointer capture.
+    }
+    const text = bar.id
+      ? mermaidViewRef.current?.querySelector<SVGTextElement>(`#${CSS.escape(`${bar.id}-text`)}`) || null
+      : null;
+    const barBounds = bar.getBBox();
+    const barRect = bar.getBoundingClientRect();
+    const surfaceRect = surface.getBoundingClientRect();
+    const liveControls = {
+      lineIndex,
+      left: barRect.left - surfaceRect.left,
+      top: barRect.top - surfaceRect.top,
+      width: barRect.width,
+      height: barRect.height,
+    };
+    setGanttBarControls(liveControls);
+    ganttBarDragRef.current = {
+      lineIndex,
+      mode,
+      startClientX: event.clientX,
+      clientPixelsPerDay: Math.max(0.25, barRect.width / schedule.durationDays),
+      svgUnitsPerClientPixel: barBounds.width / Math.max(0.25, barRect.width),
+      originalX: Number(bar.getAttribute("x")) || barBounds.x,
+      originalWidth: Number(bar.getAttribute("width")) || barBounds.width,
+      originalControlLeft: liveControls.left,
+      originalControlWidth: liveControls.width,
+      deltaClientX: 0,
+      deltaDays: 0,
+      bar,
+      text,
+    };
+    const trackPointer = (pointerEvent: PointerEvent) => {
+      pointerEvent.preventDefault();
+      previewGanttBarDrag(pointerEvent);
+    };
+    const stopTracking = () => {
+      window.removeEventListener("pointermove", trackPointer);
+      window.removeEventListener("pointerup", finishTracking);
+      window.removeEventListener("pointercancel", finishTracking);
+      if (ganttDragCleanupRef.current === stopTracking) ganttDragCleanupRef.current = null;
+    };
+    const finishTracking = () => {
+      stopTracking();
+      void finishGanttBarDrag();
+    };
+    ganttDragCleanupRef.current = stopTracking;
+    window.addEventListener("pointermove", trackPointer, { passive: false });
+    window.addEventListener("pointerup", finishTracking);
+    window.addEventListener("pointercancel", finishTracking);
+  };
+
+  const previewGanttBarDrag = (event: { clientX: number }) => {
+    const drag = ganttBarDragRef.current;
+    if (!drag) return;
+    const rawDeltaClientX = event.clientX - drag.startClientX;
+    const deltaDays = snappedGanttDragDelta(
+      source,
+      drag.lineIndex,
+      drag.mode,
+      rawDeltaClientX / drag.clientPixelsPerDay,
+    );
+    const deltaClientX = deltaDays * drag.clientPixelsPerDay;
+    const deltaSvgX = deltaClientX * drag.svgUnitsPerClientPixel;
+    drag.deltaClientX = deltaClientX;
+    drag.deltaDays = deltaDays;
+    if (drag.mode === "move") {
+      drag.bar.style.transform = `translateX(${deltaSvgX}px)`;
+      if (drag.text) drag.text.style.transform = `translateX(${deltaSvgX}px)`;
+      setGanttBarControls((current) => current && current.lineIndex === drag.lineIndex ? { ...current, left: drag.originalControlLeft + deltaClientX } : current);
+    } else if (drag.mode === "start") {
+      const limitedSvg = Math.min(deltaSvgX, drag.originalWidth - 4);
+      const limitedControl = limitedSvg / drag.svgUnitsPerClientPixel;
+      drag.bar.setAttribute("x", String(drag.originalX + limitedSvg));
+      drag.bar.setAttribute("width", String(drag.originalWidth - limitedSvg));
+      setGanttBarControls((current) => current && current.lineIndex === drag.lineIndex ? { ...current, left: drag.originalControlLeft + limitedControl, width: drag.originalControlWidth - limitedControl } : current);
+    } else {
+      const nextSvgWidth = Math.max(4, drag.originalWidth + deltaSvgX);
+      const nextControlWidth = nextSvgWidth / drag.svgUnitsPerClientPixel;
+      drag.bar.setAttribute("width", String(nextSvgWidth));
+      setGanttBarControls((current) => current && current.lineIndex === drag.lineIndex ? { ...current, width: nextControlWidth } : current);
+    }
+  };
+
+  const finishGanttBarDrag = async () => {
+    const drag = ganttBarDragRef.current;
+    if (!drag) return;
+    ganttBarDragRef.current = null;
+    const scrollerRect = scrollRef.current?.getBoundingClientRect();
+    const previewRect = drag.bar.getBoundingClientRect();
+    if (scrollerRect) {
+      const edge = drag.mode === "move" ? "centre" : drag.mode;
+      const edgeX = edge === "start"
+        ? previewRect.left
+        : edge === "end"
+          ? previewRect.right
+          : previewRect.left + previewRect.width / 2;
+      pendingGanttEdgeAnchorRef.current = {
+        lineIndex: drag.lineIndex,
+        edge,
+        viewportX: edgeX - scrollerRect.left,
+      };
+    }
+    resetGanttDragPreview(drag);
+    if (Math.abs(drag.deltaClientX) < 3) {
+      pendingGanttEdgeAnchorRef.current = null;
+      return;
+    }
+    try {
+      const updated = drag.mode === "move"
+        ? moveGanttTaskInTime(source, drag.lineIndex, drag.deltaDays)
+        : resizeGanttTask(source, drag.lineIndex, drag.mode, drag.deltaDays);
+      shouldFitMermaidRef.current = false;
+      const result = await validateAndCommitSource(updated.source, undefined, true);
+      if (!result.ok) throw new Error(result.error || "Mermaid rejected this Gantt adjustment");
+      setSelected([sourceLineSelection(updated.lineIndex)]);
+      notify(drag.mode === "move" ? "Task moved to the nearest Monday or Wednesday" : "Task duration updated");
+    } catch (caught) {
+      pendingGanttEdgeAnchorRef.current = null;
+      notify(caught instanceof Error ? caught.message : "Unable to adjust this Gantt task");
+    }
+  };
+
+  const beginMermaidPointer = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (activeDiagramType.id === "gantt" && tool === "select") {
+      const bar = (event.target as Element).closest<SVGRectElement>("rect.task[data-source-line]");
+      const lineIndex = Number(bar?.dataset.sourceLine);
+      if (bar && Number.isInteger(lineIndex)) {
+        beginGanttBarDrag(event, lineIndex, "move", bar);
+        return;
+      }
+    }
+    selectMermaidElement(event);
+  };
+
+  const moveSelectedGanttTask = async (direction: -1 | 1) => {
+    if (!selectedGanttItem || selectedGanttItem.kind !== "task") return;
+    try {
+      const updated = moveGanttTaskInOrder(source, selectedGanttItem.lineIndex, direction);
+      if (updated.source === source) return;
+      const result = await validateAndCommitSource(updated.source);
+      if (!result.ok) throw new Error(result.error || "Mermaid rejected this ordering change");
+      setSelected([sourceLineSelection(updated.lineIndex)]);
+      notify(direction < 0 ? "Task moved up" : "Task moved down");
+    } catch (caught) {
+      notify(caught instanceof Error ? caught.message : "Unable to reorder this Gantt task");
+    }
+  };
+
   const applySource = async () => {
     const result = await validateAndCommitSource(sourceDraft);
     if (!result.ok) {
@@ -2409,6 +2878,7 @@ export function MermaidEditor() {
       notify("Mermaid found invalid syntax — repair options are available");
       return;
     }
+    if ("source" in result && result.source) setSourceDraft(result.source);
     setSourceDirty(false);
     setSourcePast([]);
     setSourceFuture([]);
@@ -2438,6 +2908,39 @@ export function MermaidEditor() {
       };
     });
     shouldFitMermaidRef.current = Boolean(patch.layout || patch.look);
+  };
+
+  const updateGanttWeekStart = async (weekday: GanttWeekday) => {
+    const candidate = setGanttWeekStart(source, weekday);
+    const result = await validateAndCommitSource(candidate);
+    if (!result.ok) {
+      notify(result.error || "Mermaid rejected this Gantt week configuration");
+      return;
+    }
+    shouldFitMermaidRef.current = true;
+    notify(`Gantt weeks now start on ${weekday}`);
+  };
+
+  const updateGanttExcludeWeekends = async (excluded: boolean) => {
+    const candidate = setGanttExcludeWeekends(source, excluded);
+    const result = await validateAndCommitSource(candidate);
+    if (!result.ok) {
+      notify(result.error || "Mermaid rejected this Gantt weekend configuration");
+      return;
+    }
+    shouldFitMermaidRef.current = true;
+    notify(excluded ? "Weekends excluded from Gantt task durations" : "Weekends included in Gantt task durations");
+  };
+
+  const updateGanttInclusiveEndDates = async (inclusive: boolean) => {
+    const candidate = setGanttInclusiveEndDates(source, inclusive);
+    const result = await validateAndCommitSource(candidate);
+    if (!result.ok) {
+      notify(result.error || "Mermaid rejected this Gantt end-date configuration");
+      return;
+    }
+    shouldFitMermaidRef.current = true;
+    notify(inclusive ? "Selected Gantt end dates now include the whole day" : "Selected Gantt end dates now mark the finishing boundary");
   };
 
   const updatePolishedStyle = (patch: Partial<PolishedStyle>) => {
@@ -2741,18 +3244,17 @@ export function MermaidEditor() {
             )}
           </div>
         </div>
-        <nav className="workspace-switcher" aria-label="Workspace">
+        {polishedSupported && <nav className="workspace-switcher" aria-label="Workspace">
           <button type="button" className={viewMode !== "polished" ? "active" : ""} aria-pressed={viewMode !== "polished"} onClick={() => switchWorkspace("editor")}><MousePointer2 size={13} /> Editor</button>
           <button
             type="button"
             className={viewMode === "polished" ? "active beautiful" : "beautiful"}
             aria-pressed={viewMode === "polished"}
             aria-keyshortcuts="3"
-            disabled={!polishedSupported}
-            title={polishedSupported ? "Beautiful workspace (3)" : `Beautiful Mermaid does not yet support ${activeDiagramType.label}`}
+            title="Beautiful workspace (3)"
             onClick={() => switchWorkspace("beautiful")}
           ><BeautifulMermaidMark size={14} /> Beautiful</button>
-        </nav>
+        </nav>}
         <div className="top-actions" data-tour="file-actions">
           <div className="history-actions">
             <IconButton label="Undo" onClick={undo}><Undo2 size={17} /></IconButton>
@@ -2798,7 +3300,7 @@ export function MermaidEditor() {
           <div className="tool-group">
             <IconButton label="Select (V)" shortcut="V" disabled={!nativeFlowchart} active={nativeFlowchart && tool === "select"} onClick={() => { setTool("select"); setConnectionStart(null); }}><MousePointer2 size={19} /></IconButton>
             <IconButton label="Marquee select (M)" shortcut="M" disabled={!nativeFlowchart} active={nativeFlowchart && tool === "marquee"} onClick={() => { setTool("marquee"); setConnectionStart(null); }}><BoxSelect size={19} /></IconButton>
-            <IconButton label="Add node (N)" shortcut="N" disabled={!nativeFlowchart} onClick={() => addNode()}><Plus size={20} /></IconButton>
+            <IconButton label={activeDiagramType.id === "gantt" ? "Add Gantt item (N)" : "Add node (N)"} shortcut="N" disabled={!nativeFlowchart && activeDiagramType.id !== "gantt"} onClick={() => activeDiagramType.id === "gantt" ? openGanttCreate() : addNode()}><Plus size={20} /></IconButton>
             <IconButton label="Link nodes (L)" shortcut="L" disabled={!nativeFlowchart} active={nativeFlowchart && tool === "connect"} onClick={() => { setTool("connect"); setConnectionStart(null); notify("Choose the first node"); }}><Link2 size={19} /></IconButton>
             <IconButton label="Create subgraph (S)" shortcut="S" disabled={!nativeFlowchart} onClick={groupSelected}><Group size={19} /></IconButton>
           </div>
@@ -2914,7 +3416,12 @@ export function MermaidEditor() {
                   const path = edgePath(edge);
                   if (!path) return null;
                   return (
-                    <g key={edge.id} className={`diagram-edge ${edge.style} ${selected.includes(edge.id) ? "selected" : ""}`} onPointerDown={(event) => { if (tool === "marquee") return; event.stopPropagation(); setSelected([edge.id]); }}>
+                    <g
+                      key={edge.id}
+                      className={`diagram-edge ${edge.style} ${selected.includes(edge.id) ? "selected" : ""}`}
+                      onPointerDown={(event) => { if (tool === "marquee") return; event.stopPropagation(); setSelected([edge.id]); }}
+                      onDoubleClick={(event) => { event.stopPropagation(); setSelected([edge.id]); focusEdgeLabel(); }}
+                    >
                       <path className="edge-hit" d={path.d} />
                       <path className="edge-line" d={path.d} markerEnd={edge.arrow === false ? undefined : "url(#arrow)"} />
                       {edge.label && <g transform={`translate(${path.x}, ${path.y})`}><rect x={-32} y={-12} width={64} height={24} rx={8} /><text textAnchor="middle" dominantBaseline="middle">{edge.label}</text></g>}
@@ -2971,8 +3478,12 @@ export function MermaidEditor() {
                   width: renderedSize.width,
                   height: renderedSize.height,
                   transform: `scale(${zoom})`,
-                }}
-                onPointerDown={viewMode === "polished" ? undefined : selectMermaidElement}
+                  // SVG stroke widths normally shrink with the stage. The hit
+                  // target compensates in diagram units so relationships keep
+                  // a dependable 16 px pointer area even at fit-to-chart zoom.
+                  "--mermade-edge-hit-width": `${16 / zoom}px`,
+                } as React.CSSProperties}
+                onPointerDown={viewMode === "polished" ? undefined : beginMermaidPointer}
                 onDoubleClick={viewMode === "polished" ? undefined : editMermaidElement}
               >
                 {viewMode === "polished"
@@ -3003,6 +3514,19 @@ export function MermaidEditor() {
                 {viewMode === "mermaid" && mermaidRenderError && <div className="mermaid-render-error"><Code2 size={20} /><b>Mermaid could not render this diagram</b><span>{mermaidRenderError}</span></div>}
                 {viewMode === "polished" && beautifulPreviewMode === "diagram" && polishedRenderError && <div className="mermaid-render-error"><BeautifulMermaidMark size={20} /><b>Beautiful could not present this valid Mermaid diagram</b><span>{polishedRenderError}</span></div>}
                 {viewMode === "polished" && beautifulPreviewMode === "diagram" && !polishedRenderError && <div className="polished-credit"><BeautifulMermaidMark size={12} /> Beautiful Mermaid renderer</div>}
+              </div>
+            )}
+            {viewMode === "mermaid" && activeDiagramType.id === "gantt" && ganttBarControls && (
+              <div
+                className="gantt-task-controls"
+                style={{ left: ganttBarControls.left, top: ganttBarControls.top, width: ganttBarControls.width, height: ganttBarControls.height }}
+              >
+                <button className="gantt-resize-handle start" type="button" aria-label="Adjust task start" onPointerDown={(event) => beginGanttBarDrag(event, ganttBarControls.lineIndex, "start")} />
+                <button className="gantt-resize-handle end" type="button" aria-label="Adjust task duration" onPointerDown={(event) => beginGanttBarDrag(event, ganttBarControls.lineIndex, "end")} />
+                <div className="gantt-order-controls" aria-label="Task order">
+                  <button type="button" aria-label="Move task up" onPointerDown={(event) => event.stopPropagation()} onClick={() => void moveSelectedGanttTask(-1)}><ArrowUp size={13} /></button>
+                  <button type="button" aria-label="Move task down" onPointerDown={(event) => event.stopPropagation()} onClick={() => void moveSelectedGanttTask(1)}><ArrowDown size={13} /></button>
+                </div>
               </div>
             )}
             </div>
@@ -3124,12 +3648,18 @@ export function MermaidEditor() {
           <div className="inspector-tabs">
             <button type="button" className={tab === "properties" ? "active" : ""} onClick={() => setTab("properties")}>Properties</button>
             <button type="button" className={tab === "appearance" ? "active" : ""} onClick={() => setTab("appearance")}>Appearance</button>
-            <button type="button" className={tab === "style" ? "active" : ""} onClick={() => setTab("style")}>Style</button>
+            <button type="button" className={tab === "style" ? "active" : ""} onClick={() => setTab("style")}>{activeDiagramType.id === "gantt" ? "Config" : "Style"}</button>
           </div>
           <div className="inspector-body">
             {tab === "style" ? (
               <div className="diagram-style-panel">
                 <div className="field-stack">
+                  {activeDiagramType.id === "gantt" && <>
+                    <label><span>Week starts on</span><select value={ganttWeekStart} onChange={(event) => void updateGanttWeekStart(event.target.value as GanttWeekday)}>{GANTT_WEEKDAY_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+                    <label className="toggle-row"><span>Include selected end date</span><input type="checkbox" checked={ganttInclusiveEndDates} onChange={(event) => void updateGanttInclusiveEndDates(event.target.checked)} /></label>
+                    <label className="toggle-row"><span>Exclude weekends</span><input type="checkbox" checked={ganttExcludesWeekends} onChange={(event) => void updateGanttExcludeWeekends(event.target.checked)} /></label>
+                    <p className="style-compatibility-note gantt-config-note">End dates are inclusive by default, so selecting Friday places the bar’s finishing edge at the start of Saturday. Uses Mermaid’s standard <code>inclusiveEndDates</code>, weekly tick, and weekend directives.</p>
+                  </>}
                   <label><span>Theme</span><select value={diagramStyle.theme} onChange={(event) => updateDiagramStyle({ theme: event.target.value as MermaidTheme })}>
                     {(modernStyleFeatures ? MODERN_THEME_OPTIONS : LEGACY_THEME_OPTIONS).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                     {!modernStyleFeatures && !LEGACY_THEME_OPTIONS.some(({ value }) => value === diagramStyle.theme) && <option value={diagramStyle.theme} disabled>{diagramStyle.theme} — Mermaid 11 only</option>}
@@ -3149,6 +3679,8 @@ export function MermaidEditor() {
                   <button className="wide-action" type="button" onClick={() => updateDiagramStyle(DEFAULT_DIAGRAM_STYLE)}><RotateCcw size={15} /> Reset diagram style</button>
                 </div>
               </div>
+            ) : selectedGanttItem ? (
+              <GanttItemProperties key={`${selectedSourceLine}:${selectedSourceStatement}:${tab}`} source={source} item={selectedGanttItem} panel={tab === "appearance" ? "appearance" : "properties"} onCommit={applyGanttItemEdit} />
             ) : selectedSourceStatement !== undefined ? (
               <div className="field-stack rendered-statement-properties">
                 <div className="selection-heading"><div className="edge-symbol"><Code2 size={18} /></div><div><span>Mermaid statement</span><b>Line {selectedSourceLine + 1}</b></div></div>
@@ -3176,6 +3708,33 @@ export function MermaidEditor() {
                       <option value="">None</option>
                       {diagram.groups.map((group) => <option key={group.id} value={group.id}>{group.label}</option>)}
                     </select></label>
+                    {selectedNodeRelationships.length > 0 && (
+                      <div className="node-relationships">
+                        <div className="node-relationships-heading"><span>Relationships</span><b>{selectedNodeRelationships.length}</b></div>
+                        <div className="node-relationship-list" aria-label={`Relationships for ${selectedNode.label}`}>
+                          {selectedNodeRelationships.map((edge) => {
+                            const outgoing = edge.from === selectedNode.id;
+                            const relatedNodeId = outgoing ? edge.to : edge.from;
+                            const relatedNodeLabel = nodeById.get(relatedNodeId)?.label || relatedNodeId;
+                            return (
+                              <button
+                                key={edge.id}
+                                type="button"
+                                aria-label={`Edit ${outgoing ? "outgoing" : "incoming"} relationship ${edge.from} to ${edge.to}`}
+                                title={`${edge.from} → ${edge.to}`}
+                                onClick={() => { setSelected([edge.id]); focusEdgeLabel(); }}
+                              >
+                                <span className={`node-relationship-direction ${outgoing ? "outgoing" : "incoming"}`}><ArrowRight size={14} /></span>
+                                <span className="node-relationship-copy">
+                                  <b>{outgoing ? "To" : "From"} {relatedNodeLabel}</b>
+                                  <small>{edge.label.trim() || "Unlabelled"} · {edge.from} → {edge.to}</small>
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
                     <button className="wide-action" type="button" onClick={() => { setTool("connect"); setConnectionStart(selectedNode.id); notify("Choose a destination node"); }}><Link2 size={16} /> Add relationship from this node</button>
                   </div>
                 ) : (
@@ -3190,7 +3749,7 @@ export function MermaidEditor() {
               <>
                 <div className="selection-heading"><div className="edge-symbol"><ArrowRight size={20} /></div><div><span>Relationship</span><b>{selectedEdge.from} → {selectedEdge.to}</b></div><IconButton label="Delete relationship" onClick={deleteSelected}><Trash2 size={16} /></IconButton></div>
                 <div className="field-stack">
-                  <label><span>Label</span><input value={selectedEdge.label} placeholder="Optional label" onFocus={checkpoint} onChange={(event) => updateEdge(selectedEdge.id, { label: event.target.value }, false)} /></label>
+                  <label><span>Label</span><input ref={edgeLabelInputRef} aria-keyshortcuts="E" value={selectedEdge.label} placeholder="Optional label" onFocus={checkpoint} onChange={(event) => updateEdge(selectedEdge.id, { label: event.target.value }, false)} /></label>
                   <label><span>Line style</span><select value={selectedEdge.style} onChange={(event) => updateEdge(selectedEdge.id, { style: event.target.value as EdgeStyle })}><option value="solid">Solid</option><option value="dashed">Dashed</option><option value="thick">Thick</option></select></label>
                   <label><span>End marker</span><select value={selectedEdge.arrow === false ? "line" : "arrow"} onChange={(event) => updateEdge(selectedEdge.id, { arrow: event.target.value === "arrow" })}><option value="arrow">Arrow</option><option value="line">Plain line</option></select></label>
                   <div className="relation-summary"><span>{diagram.nodes.find((node) => node.id === selectedEdge.from)?.label}</span><ArrowRight size={18} /><span>{diagram.nodes.find((node) => node.id === selectedEdge.to)?.label}</span></div>
@@ -3217,7 +3776,9 @@ export function MermaidEditor() {
                 <p>{nativeFlowchart ? "Choose a node or relationship to edit its content and appearance." : `${visualModeName} editing preserves the diagram's Mermaid-specific structure.`}</p>
                 {nativeFlowchart
                   ? <button className="wide-action" type="button" onClick={() => addNode()}><Plus size={16} /> Add your first node</button>
-                  : <button className="wide-action" type="button" onClick={() => openSourceEditor()}><Code2 size={16} /> Edit Mermaid source</button>}
+                  : activeDiagramType.id === "gantt"
+                    ? <button className="wide-action" type="button" onClick={openGanttCreate}><Plus size={16} /> Add Gantt item</button>
+                    : <button className="wide-action" type="button" onClick={() => openSourceEditor()}><Code2 size={16} /> Edit Mermaid source</button>}
               </div>
             )}
           </div>
@@ -3242,6 +3803,17 @@ export function MermaidEditor() {
             <a href={GITHUB_URL} target="_blank" rel="noreferrer">View Mermade on GitHub <ExternalLink size={14} /></a>
           </section>
         </div>
+      )}
+
+      {ganttCreateOpen && activeDiagramType.id === "gantt" && (
+        <GanttCreateDialog
+          key={`${source}:${ganttCreateDefaults.sectionLineIndex}:${ganttCreateDefaults.order}`}
+          source={source}
+          initialSectionLineIndex={ganttCreateDefaults.sectionLineIndex}
+          initialOrder={ganttCreateDefaults.order}
+          onClose={() => setGanttCreateOpen(false)}
+          onCreate={createGanttItem}
+        />
       )}
 
       {tourStep !== null && tourRect && (
@@ -3355,7 +3927,7 @@ export function MermaidEditor() {
                   <div><b>Create subgraph</b><kbd>S</kbd></div>
                   <div><b>Add decision</b><kbd>D</kbd></div>
                   <div><b>Add connected decision</b><span><kbd>⇧</kbd><kbd>D</kbd></span></div>
-                  <div><b>Edit selected node</b><kbd>E</kbd></div>
+                  <div><b>Edit selected text</b><kbd>E</kbd></div>
                 </div>
               </div>
               <div className="shortcuts-section">
@@ -3363,7 +3935,7 @@ export function MermaidEditor() {
                 <div className="shortcuts-list">
                   <div><b>FreeForm canvas</b><kbd>1</kbd></div>
                   <div><b>Mermaid canvas</b><kbd>2</kbd></div>
-                  <div><b>Beautiful workspace</b><kbd>3</kbd></div>
+                  {polishedSupported && <div><b>Beautiful workspace</b><kbd>3</kbd></div>}
                 </div>
               </div>
               <div className="shortcuts-section">

@@ -48,6 +48,16 @@ test("removes DokuWiki raw mode with its Mermaid wrapper", async () => {
   assert.equal(repair?.source, "flowchart TB\n  A --> B");
 });
 
+test("repairs visually blank flowchart nodes without inventing text", async () => {
+  const { createRepairProposals, repairEmptyFlowchartNodeLabels } = await loadRepairHelpers();
+  const source = 'flowchart TB\n  n80[""]\n  n81@{ shape: rect, label: "" }\n  n80 --> n81';
+  const repaired = repairEmptyFlowchartNodeLabels(source);
+  const proposals = createRepairProposals(source, "11.16.0", "flowchart");
+
+  assert.equal(repaired, 'flowchart TB\n  n80[" "]\n  n81@{ shape: rect, label: " " }\n  n80 --> n81');
+  assert.ok(proposals.some((proposal) => proposal.id === "repair-empty-flowchart-labels" && proposal.source === repaired));
+});
+
 test("offers diagram-specific declaration and subgraph repairs", async () => {
   const { createRepairProposals } = await loadRepairHelpers();
   const declaration = createRepairProposals("A --> B", "11.16.0", "flowchart");

@@ -71,7 +71,7 @@ test("keeps imported Mermaid source authoritative until the user changes its sty
   assert.doesNotMatch(editor, /applyDiagramStyle\(diagram\.source \?\? toMermaid\(diagram\)/);
   assert.doesNotMatch(editor, /mermaid\.initialize\(\{[^}]*theme: "base"/);
   assert.match(editor, /renderProfile: imported\.renderProfile/);
-  assert.match(editor, /renderMermaidSvg\(mermaid, renderId, source, renderProfileClass\)/);
+  assert.match(editor, /renderMermaidSvg\(mermaid, renderId, source, renderProfileClass, ganttRenderWidth\)/);
   assert.match(css, /\.dokuwiki-mermaid \.nodeLabel[^}]*font-size: 12px !important;[^}]*line-height: 1\.5 !important;/);
 });
 
@@ -122,20 +122,21 @@ test("provides dynamic diagram help with external guidance", async () => {
 test("provides a complete keyboard-shortcuts reference", async () => {
   const editor = await readFile(new URL("../app/mermaid-editor.tsx", import.meta.url), "utf8");
 
-  for (const label of ["Select", "Marquee select", "New node", "New connected node", "Link nodes", "Create subgraph", "Add decision", "Add connected decision", "Edit selected node", "Delete selection", "Undo", "Redo", "Pan canvas", "Zoom canvas"]) {
+  for (const label of ["Select", "Marquee select", "New node", "New connected node", "Link nodes", "Create subgraph", "Add decision", "Add connected decision", "Edit selected text", "Delete selection", "Undo", "Redo", "Pan canvas", "Zoom canvas"]) {
     assert.match(editor, new RegExp(`>${label}<`));
   }
   assert.match(editor, /<kbd>⇧<\/kbd><kbd>N<\/kbd>/);
-  assert.match(editor, />Edit selected node<\/b><kbd>E<\/kbd>/);
+  assert.match(editor, />Edit selected text<\/b><kbd>E<\/kbd>/);
   assert.match(editor, /id="shortcuts-title">Keyboard shortcuts/);
 });
 
-test("edits exactly one selected node with E without collapsing multi-selection", async () => {
+test("edits exactly one selected node or relationship with E without collapsing multi-selection", async () => {
   const editor = await readFile(new URL("../app/mermaid-editor.tsx", import.meta.url), "utf8");
 
   assert.match(editor, /if \(key === "e"\) \{[\s\S]{0,120}editSelectedText\(\)/);
-  assert.match(editor, /if \(selected\.length !== 1\) \{[\s\S]{0,100}Select one node to edit its text/);
+  assert.match(editor, /if \(selected\.length !== 1\) \{[\s\S]{0,120}Select one node or relationship to edit its text/);
   assert.match(editor, /setEditingNode\(node\.id\)/);
+  assert.match(editor, /const edge = diagram\.edges\.find[\s\S]{0,240}focusEdgeLabel\(\)/);
   assert.match(editor, /setEditingSourceLine\(selectedSourceLine\)/);
   assert.doesNotMatch(editor, /if \(selected\.length !== 1\)[\s\S]{0,180}setSelected/);
 });
@@ -170,8 +171,9 @@ test("supports visible marquee selection in Mermaid view", async () => {
   assert.doesNotMatch(editor, /label="Marquee select \(M\)"[^\n]+setViewMode\("free"\)/);
   assert.match(editor, /if \(tool === "marquee"\) event\.preventDefault\(\);/);
   assert.match(css, /\.canvas-viewport\.is-marquee, \.canvas-viewport\.is-marquee \* \{[^}]*user-select: none !important;/);
-  assert.match(css, /\.mermaid-render \[data-node-id\]\.selected \{ filter: none; \}/);
-  assert.match(css, /\.mermaid-render \[data-node-id\]\.selected \.label-container path \{[^}]*stroke: var\(--purple\) !important;[^}]*stroke-width: 3\.5px !important;/);
+  assert.match(css, /\.mermaid-render \[data-node-id\]\.mermade-selected \{ filter: none; \}/);
+  assert.match(css, /\.mermaid-render \[data-node-id\]\.mermade-selected > rect:not\(\.mermade-node-hit\)/);
+  assert.match(css, /\.mermaid-render \[data-node-id\]\.mermade-selected \.label-container path \{[^}]*stroke: var\(--purple\) !important;[^}]*stroke-width: 3\.5px !important;/);
   assert.match(css, /\.diagram-node\.selected \.node-shape \{[^}]*border-color: var\(--purple\);[^}]*drop-shadow\(1px 0 0 var\(--purple\)\)[^}]*drop-shadow\(0 -1px 0 var\(--purple\)\)/);
   assert.doesNotMatch(css, /\.diagram-node\.selected \.node-shape \{[^}]*rgb\(224 9 95 \/ 15%\)/);
   assert.match(editor, /function toggleRenderedSelection\(element: HTMLElement, selected: boolean\)/);
@@ -191,6 +193,8 @@ test("keeps large ELK flowcharts centred, selectable, and source-deletable", asy
   assert.match(editor, /sourceNodeIds\.has\(id\)/);
   assert.match(editor, /left: `max\([^`]+calc\(\(100% - \$\{renderedSize\.width \* zoom\}px\) \/ 2\)\)`/);
   assert.match(rendering, /classList\.add\("mermade-node-hit"\)/);
+  assert.match(rendering, /hit\.style\.setProperty\("stroke", "transparent", "important"\)/);
+  assert.match(rendering, /hit\.style\.setProperty\("opacity", "0", "important"\)/);
   assert.match(rendering, /\.node > \.label-container path/);
   assert.match(css, /\.mermade-node-hit \{[^}]*fill: transparent !important;[^}]*pointer-events: all;/);
 });
@@ -225,7 +229,7 @@ test("anchors canvas view switches to the same logical node", async () => {
 test("switches directly between canvas views with unmodified number keys", async () => {
   const editor = await readFile(new URL("../app/mermaid-editor.tsx", import.meta.url), "utf8");
 
-  assert.match(editor, /if \(key === "1" \|\| key === "2" \|\| key === "3"\)/);
+  assert.match(editor, /if \(key === "1" \|\| key === "2" \|\| \(key === "3" && polishedSupported\)\)/);
   assert.match(editor, /if \(key === "3"\) switchWorkspace\("beautiful"\)/);
   assert.match(editor, /else switchCanvasView\(key === "1" \? "free" : "mermaid"\)/);
   assert.match(editor, /aria-keyshortcuts="1"/);
@@ -233,7 +237,7 @@ test("switches directly between canvas views with unmodified number keys", async
   assert.match(editor, /aria-keyshortcuts="3"/);
   assert.match(editor, />FreeForm canvas<\/b><kbd>1<\/kbd>/);
   assert.match(editor, />Mermaid canvas<\/b><kbd>2<\/kbd>/);
-  assert.match(editor, />Beautiful workspace<\/b><kbd>3<\/kbd>/);
+  assert.match(editor, /\{polishedSupported && <div><b>Beautiful workspace<\/b><kbd>3<\/kbd><\/div>}\s*/);
   assert.match(editor, /targetView === "polished" && !polishedSupported[\s\S]{0,160}is not yet supported by Beautiful Mermaid/);
 });
 
@@ -263,6 +267,7 @@ test("loads Beautiful Mermaid as a distinct presentation workspace without repla
   assert.doesNotMatch(editor, /from "\.\/beautiful-mermaid"/);
   assert.match(editor, /beautifulWorkspacePromise \?\?= import\("\.\/beautiful-mermaid"\)/);
   assert.match(editor, /aria-label="Workspace"/);
+  assert.match(editor, /\{polishedSupported && <nav className="workspace-switcher" aria-label="Workspace">/);
   assert.match(editor, /className="beautiful-inspector-body"/);
   assert.match(editor, /aria-label="Beautiful output preview"/);
   for (const preview of ["Diagram", "Unicode", "ASCII"]) assert.match(editor, new RegExp(`"${preview}"`));
@@ -307,17 +312,25 @@ test("does not disable spatial flowchart editing merely because advanced source 
 
   assert.match(editor, /const nativeFlowchart = activeDiagramType\.id === "flowchart" && diagram\.nodes\.length > 0/);
   assert.doesNotMatch(editor, /function parseMermaid[\s\S]{0,180}if \(!canUseNativeFlowchartEditor\(source\)\) return null/);
-  assert.match(editor, /source: preserveFlowchartSource \? candidate : undefined/);
+  assert.match(editor, /source: preparedCandidate,/);
+  assert.match(editor, /repairEmptyFlowchartNodeLabels\(diagram\.source\)/);
+  assert.match(editor, /return escaped\.trim\(\) \? escaped : " "/);
+  assert.doesNotMatch(editor, /source:\s*preserveFlowchartSource\s*\?/);
   assert.match(editor, /updateFlowchartDirection\(current\.source, direction\)/);
   assert.match(editor, /appendFlowchartStatements\(current\.source/);
   assert.match(editor, /removeFlowchartItems\(candidate, \{ nodeIds, edges: selectedEdges, subgraphIds \}\)/);
   assert.match(editor, /updateFlowchartSubgraphStatement\(current\.source, id, label\)/);
   assert.match(editor, /aria-label="Subgraph"[\s\S]*?assignNodeToSubgraph\(selectedNode\.id, event\.target\.value\)/);
+  assert.match(editor, /const selectedNodeRelationships = selectedNode[\s\S]*?edge\.from === selectedNode\.id \|\| edge\.to === selectedNode\.id/);
+  assert.match(editor, /aria-label=\{`Relationships for \$\{selectedNode\.label\}`\}/);
+  assert.match(editor, /aria-label=\{`Edit \$\{outgoing \? "outgoing" : "incoming"\} relationship \$\{edge\.from\} to \$\{edge\.to\}`\}/);
+  assert.match(editor, /onClick=\{\(\) => \{ setSelected\(\[edge\.id\]\); focusEdgeLabel\(\); \}\}/);
   assert.match(editor, /moveFlowchartNodeToSubgraph\(candidate, nodeId, targetId\)/);
   assert.match(sourceHelpers, /export function moveFlowchartNodeToSubgraph/);
-  assert.match(editor, /\(\?:-->\|---\)\\\|/);
-  assert.match(editor, /toExpression\.split\(\/\\s\+&\\s\+\/\)/);
-  assert.doesNotMatch(editor, /toExpression\.split\(\/\\s\*&\\s\*\/\)/);
+  assert.match(sourceHelpers, /export function parseFlowchartRelationshipLine/);
+  assert.match(editor, /parseFlowchartRelationshipLine\(line\)/);
+  assert.match(editor, /relationship\.edges\.forEach\(\(edge\) => addParsedEdge/);
+  assert.doesNotMatch(editor, /const connectorPattern =/);
   assert.doesNotMatch(editor, /Delete source-backed flowchart items/);
   assert.doesNotMatch(editor, /Remove source-backed subgraphs/);
 });
@@ -326,7 +339,7 @@ test("creates white nodes and supports connected Shift+N and Shift+D shortcuts",
   const editor = await readFile(new URL("../app/mermaid-editor.tsx", import.meta.url), "utf8");
 
   assert.match(editor, /label: "New step",[\s\S]*?color: "#ffffff"/);
-  assert.match(editor, /from: origin\.id, to: id/);
+  assert.match(editor, /from: origin\.id,\s+to: id/);
   assert.match(editor, /addNode\("rectangle", event\.shiftKey\)/);
   assert.match(editor, /addNode\("diamond", event\.shiftKey, "Shift\+D"\)/);
   assert.match(editor, />Add connected decision<\/b><span><kbd>⇧<\/kbd><kbd>D<\/kbd>/);
@@ -355,7 +368,7 @@ test("provides diagram-wide Mermaid styling as a third inspector scope", async (
 
   assert.match(editor, />Properties<\/button>/);
   assert.match(editor, />Appearance<\/button>/);
-  assert.match(editor, />Style<\/button>/);
+  assert.match(editor, /activeDiagramType\.id === "gantt" \? "Config" : "Style"/);
   assert.match(editor, /applyDiagramStyle/);
   assert.match(editor, />Layout<\/span>/);
   assert.match(editor, /Base — customisable/);

@@ -4,7 +4,7 @@ import tidyTreeLayouts from "@mermaid-js/layout-tidy-tree";
 import mermaid from "mermaid";
 import mermaidV10 from "mermaid-v10";
 import { FLOWCHART_SHAPES } from "../../app/flowchart-shapes";
-import { normalizeRenderedSvg } from "../../app/mermaid-rendering";
+import { decorateRenderedStatements, normalizeRenderedSvg } from "../../app/mermaid-rendering";
 import { applyDiagramStyle, DEFAULT_DIAGRAM_STYLE } from "../../app/mermaid-style";
 import { MERMAID_DIAGRAM_TYPES } from "../../app/mermaid-types";
 
@@ -148,6 +148,77 @@ async function renderStarter(id: string) {
   return renderSource(type.id, type.label, type.id, type.template);
 }
 
+async function inspectGanttSelection(source: string) {
+  const host = document.createElement("div");
+  host.style.cssText = "position:fixed;left:-100000px;top:0;visibility:hidden;width:1600px;height:1200px";
+  document.body.append(host);
+  try {
+    const parsed = await mermaid.parse(source);
+    const { svg: markup } = await mermaid.render(`gantt-selection-${++renderSequence}`, source, host);
+    host.innerHTML = markup;
+    const svg = host.querySelector("svg");
+    if (!svg) throw new Error("Gantt did not produce an SVG element");
+    decorateRenderedStatements(svg, source);
+    const taskText = [...svg.querySelectorAll<SVGTextElement>("text.taskText, text[class*='taskTextOutside']")];
+    const sectionText = [...svg.querySelectorAll<SVGTextElement>("text.sectionTitle")];
+    const taskBars = [...svg.querySelectorAll<SVGRectElement>("rect.task, rect[class*='task']")]
+      .filter((element) => !element.classList.contains("section"));
+    return {
+      diagramType: parsed.diagramType,
+      taskLines: taskText.map((element) => element.dataset.sourceLine),
+      sectionLines: sectionText.map((element) => element.dataset.sourceLine),
+      barLines: taskBars.map((element) => element.dataset.sourceLine),
+    };
+  } finally {
+    host.remove();
+  }
+}
+
+function inspectDuplicateGanttIdSelection() {
+  const namespace = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(namespace, "svg");
+  const source = "gantt\n  dateFormat YYYY-MM-DD\n  section Shipping\n  Floor Grouping and Matrix :active, ship4, 2026-08-10, 10d\n  Training :ship4, 2026-08-16, 31d";
+  for (const label of ["Floor Grouping and Matrix", "Training"]) {
+    const bar = document.createElementNS(namespace, "rect");
+    bar.id = "ship4";
+    bar.classList.add("task");
+    svg.append(bar);
+    const text = document.createElementNS(namespace, "text");
+    text.id = "ship4-text";
+    text.classList.add("taskText");
+    text.textContent = label;
+    svg.append(text);
+  }
+  decorateRenderedStatements(svg, source);
+  return {
+    taskLines: [...svg.querySelectorAll<SVGTextElement>("text.taskText")].map((element) => element.dataset.sourceLine),
+    barLines: [...svg.querySelectorAll<SVGRectElement>("rect.task")].map((element) => element.dataset.sourceLine),
+  };
+}
+
+async function inspectRepeatedFlowchartLabelSelection() {
+  const source = [
+    "flowchart TB",
+    "  A -->|Review| B",
+    "  C -->|Review| D",
+  ].join("\n");
+  const host = document.createElement("div");
+  host.style.cssText = "position:fixed;left:-100000px;top:0;visibility:hidden;width:1200px;height:800px";
+  document.body.append(host);
+  try {
+    const { svg: markup } = await mermaid.render(`flowchart-repeated-label-${++renderSequence}`, source, host);
+    host.innerHTML = markup;
+    const svg = host.querySelector("svg");
+    if (!svg) throw new Error("Flowchart did not produce an SVG element");
+    decorateRenderedStatements(svg, source);
+    return [...svg.querySelectorAll<SVGGraphicsElement>("text, foreignObject")]
+      .filter((element) => element.textContent?.trim() === "Review")
+      .map((element) => element.dataset.sourceLine);
+  } finally {
+    host.remove();
+  }
+}
+
 async function parseStyledStarter(id: string) {
   const type = typeFor(id);
   const source = applyDiagramStyle(type.template, {
@@ -234,5 +305,8 @@ Object.assign(window, {
     parseLegacyStyledFlowchart,
     parseShape,
     renderShape,
+    inspectGanttSelection,
+    inspectDuplicateGanttIdSelection,
+    inspectRepeatedFlowchartLabelSelection,
   },
 });
