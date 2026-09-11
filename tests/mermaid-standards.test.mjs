@@ -710,6 +710,63 @@ test("local diagram switcher creates, searches, switches, duplicates and deletes
   assert.equal(await nameInput.inputValue(), originalName);
 });
 
+test("blocked browser storage still allows creating and switching session diagrams", { timeout: 30_000 }, async () => {
+  const isolated = await browser.newPage();
+  const errors = [];
+  isolated.on("pageerror", (error) => errors.push(error.message));
+  try {
+    await isolated.addInitScript(() => {
+      Object.defineProperty(window, "localStorage", { get() { throw new DOMException("Blocked", "SecurityError"); } });
+    });
+    await isolated.goto(page.url());
+    await isolated.locator(".welcome-dialog").getByRole("button", { name: "Start Editing" }).click();
+    const name = isolated.getByRole("textbox", { name: "Diagram name" });
+    const original = await name.inputValue();
+    await isolated.locator(".save-status").click();
+    await isolated.getByRole("dialog", { name: "Local diagrams" }).getByRole("button", { name: "New" }).click();
+    await name.fill("Session only");
+    await isolated.locator(".save-status.unavailable").waitFor();
+    await isolated.locator(".save-status").click();
+    await isolated.getByRole("option", { name: new RegExp(`^${original}`) }).click();
+    assert.equal(await name.inputValue(), original);
+    assert.deepEqual(errors, []);
+  } finally {
+    await isolated.close();
+  }
+});
+
+test("an import that finishes reading after a document switch cannot replace the new diagram", { timeout: 30_000 }, async () => {
+  const isolated = await browser.newPage();
+  try {
+    await isolated.addInitScript(() => {
+      const read = File.prototype.text;
+      File.prototype.text = async function () {
+        window.fileReadStarted = true;
+        await new Promise((resolve) => { window.releaseFileRead = resolve; });
+        const value = await read.call(this);
+        window.fileReadFinished = true;
+        return value;
+      };
+    });
+    await isolated.goto(page.url());
+    await isolated.locator(".welcome-dialog").getByRole("button", { name: "Start Editing" }).click();
+    await isolated.locator('input[type="file"]').setInputFiles({
+      name: "Pending import.mmd", mimeType: "text/plain", buffer: Buffer.from("flowchart LR\n Old --> Imported"),
+    });
+    await isolated.waitForFunction(() => window.fileReadStarted);
+    await isolated.locator(".save-status").click();
+    await isolated.getByRole("dialog", { name: "Local diagrams" }).getByRole("button", { name: "New" }).click();
+    await isolated.getByRole("textbox", { name: "Diagram name" }).fill("New document");
+    await isolated.evaluate(() => window.releaseFileRead());
+    await isolated.waitForFunction(() => window.fileReadFinished);
+    await isolated.getByRole("button", { name: "Source", exact: true }).click();
+    assert.equal(await isolated.getByRole("textbox", { name: "Diagram name" }).inputValue(), "New document");
+    assert.doesNotMatch(await isolated.getByRole("textbox", { name: "Mermaid source" }).inputValue(), /Old|Imported/);
+  } finally {
+    await isolated.close();
+  }
+});
+
 test("a selected node can move into and out of an existing subgraph", { timeout: 60_000 }, async () => {
   await page.keyboard.press("Escape");
   await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "Editor", exact: true }).click();

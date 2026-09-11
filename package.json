@@ -13,6 +13,7 @@
     "build:pages": "npm run patch:mermaid && MERMADE_GITHUB_PAGES=true next build",
     "start": "next start",
     "test": "MERMADE_TEST_BUILD=true npm run build && MERMADE_TEST_BUILD=true node --test tests/*.test.mjs",
+    "test:unit": "npm run patch:mermaid && node scripts/test-unit.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern .next-test"
   },
   "dependencies": {

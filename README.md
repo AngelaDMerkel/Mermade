@@ -188,11 +188,15 @@ Useful commands:
 ```bash
 npm run dev          # local development server
 npm test             # production build plus all automated tests
+npm run test:unit    # tests without a production build or Chrome
 npm run lint         # static analysis
 npm run build:pages  # verify the static GitHub Pages export
 ```
 
 ## Testing
+
+See [the architecture review](ARCHITECTURE.md) for module responsibilities,
+editing invariants, the refactoring findings and remaining limitations.
 
 Mermade tests both Mermaid correctness and rendered output. The shared diagram registry drives the standards suites, so registering a new diagram type automatically subjects it to the same baseline checks.
 

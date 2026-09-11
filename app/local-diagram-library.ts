@@ -20,7 +20,7 @@ export type LocalDiagramDocument<T> = LocalDiagramSummary & {
   diagram: T;
 };
 
-type StorageLike = Pick<Storage, "getItem" | "setItem" | "removeItem">;
+export type StorageLike = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 
 function readJson(storage: StorageLike, key: string): unknown {
   try {

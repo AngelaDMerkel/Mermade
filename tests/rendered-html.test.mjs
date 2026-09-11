@@ -71,7 +71,7 @@ test("keeps imported Mermaid source authoritative until the user changes its sty
   assert.doesNotMatch(editor, /applyDiagramStyle\(diagram\.source \?\? toMermaid\(diagram\)/);
   assert.doesNotMatch(editor, /mermaid\.initialize\(\{[^}]*theme: "base"/);
   assert.match(editor, /renderProfile: imported\.renderProfile/);
-  assert.match(editor, /renderMermaidSvg\(mermaid, renderId, source, renderProfileClass, ganttRenderWidth\)/);
+  assert.match(editor, /renderMermaidSvg\(\{ version: activeMermaidVersion, id: renderId, source, renderProfileClass, renderWidth: ganttRenderWidth \}\)/);
   assert.match(css, /\.dokuwiki-mermaid \.nodeLabel[^}]*font-size: 12px !important;[^}]*line-height: 1\.5 !important;/);
 });
 
@@ -208,7 +208,7 @@ test("keeps rendered Mermaid nodes stable between click and double-click", async
   assert.match(editor, /aria-label="Mermaid statement"/);
   assert.match(editor, /await validateAndCommitSource\(lines\.join\("\\n"\)\)/);
   assert.match(editor, /viewMode === "mermaid" && editingNode && selectedNode/);
-  assert.match(editor, /\}, \[activeDiagramType\.id, activeMermaidVersion, currentLayoutCompatibilityError, diagramStyle\.layout, renderProfileClass, restoreViewAnchor, source, viewMode\]\);/);
+  assert.match(editor, /\}, \[documentSession, activeDiagramType\.id, activeMermaidVersion, currentLayoutCompatibilityError, diagramStyle\.layout, renderProfileClass, restoreViewAnchor, source, viewMode\]\);/);
   assert.doesNotMatch(editor, /diagram\.nodes, selected, source, viewMode/);
 });
 
@@ -311,10 +311,6 @@ test("does not disable spatial flowchart editing merely because advanced source 
   ]);
 
   assert.match(editor, /const nativeFlowchart = activeDiagramType\.id === "flowchart" && diagram\.nodes\.length > 0/);
-  assert.doesNotMatch(editor, /function parseMermaid[\s\S]{0,180}if \(!canUseNativeFlowchartEditor\(source\)\) return null/);
-  assert.match(editor, /source: preparedCandidate,/);
-  assert.match(editor, /repairEmptyFlowchartNodeLabels\(diagram\.source\)/);
-  assert.match(editor, /return escaped\.trim\(\) \? escaped : " "/);
   assert.doesNotMatch(editor, /source:\s*preserveFlowchartSource\s*\?/);
   assert.match(editor, /updateFlowchartDirection\(current\.source, direction\)/);
   assert.match(editor, /appendFlowchartStatements\(current\.source/);
@@ -328,8 +324,6 @@ test("does not disable spatial flowchart editing merely because advanced source 
   assert.match(editor, /moveFlowchartNodeToSubgraph\(candidate, nodeId, targetId\)/);
   assert.match(sourceHelpers, /export function moveFlowchartNodeToSubgraph/);
   assert.match(sourceHelpers, /export function parseFlowchartRelationshipLine/);
-  assert.match(editor, /parseFlowchartRelationshipLine\(line\)/);
-  assert.match(editor, /relationship\.edges\.forEach\(\(edge\) => addParsedEdge/);
   assert.doesNotMatch(editor, /const connectorPattern =/);
   assert.doesNotMatch(editor, /Delete source-backed flowchart items/);
   assert.doesNotMatch(editor, /Remove source-backed subgraphs/);
@@ -350,7 +344,6 @@ test("creates white nodes and supports connected Shift+N and Shift+D shortcuts",
 test("auto-organises pasted flowcharts from their relationships", async () => {
   const editor = await readFile(new URL("../app/mermaid-editor.tsx", import.meta.url), "utf8");
 
-  assert.match(editor, /layoutFlowchart\(parsedNodes, edges, direction\)/);
   assert.match(editor, /label="Organise chart \(O\)"/);
   assert.match(editor, /shouldFitFreeformRef\.current = true/);
 });
@@ -380,12 +373,12 @@ test("provides diagram-wide Mermaid styling as a third inspector scope", async (
 });
 
 test("loads optional Mermaid engines and layout plugins only when requested", async () => {
-  const editor = await readFile(new URL("../app/mermaid-editor.tsx", import.meta.url), "utf8");
+  const runtime = await readFile(new URL("../app/editor/mermaid-runtime.ts", import.meta.url), "utf8");
 
-  assert.match(editor, /diagramTypeId === "zenuml"/);
-  assert.match(editor, /layout === "elk" \|\| layout === "tidy-tree"/);
-  assert.match(editor, /ensureMermaidFeature/);
-  assert.doesNotMatch(editor, /Promise\.all\(\[\s*import\("@mermaid-js\/layout-elk"\)/);
+  assert.match(runtime, /diagramTypeId === "zenuml"/);
+  assert.match(runtime, /layout === "elk" \|\| layout === "tidy-tree"/);
+  assert.match(runtime, /ensureMermaidFeature/);
+  assert.doesNotMatch(runtime, /Promise\.all\(\[\s*import\("@mermaid-js\/layout-elk"\)/);
 });
 
 test("guards incompatible Tidy Tree graphs and clears stale failed renders", async () => {

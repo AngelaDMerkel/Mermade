@@ -51,13 +51,20 @@ import {
   useRef,
   useState,
 } from "react";
+import type { Diagram, DiagramNode, DiagramEdge, EdgeStyle, NodeShape, MermaidVersionPreference, SupportedMermaidVersion } from "./editor/diagram-types";
+import { clone, createBlankDiagram, edgeSyntax, hasDuplicateRelationshipIds, initialDiagram, nodeStyleSyntax, nodeSyntax, normaliseStoredDiagram, parseMermaid, projectSourceBackedFlowchart, restoreStoredDiagram, toMermaid } from "./editor/diagram-model";
+import { detectMermaidVersion, resolvedMermaidVersion } from "./editor/mermaid-version";
+import { renderMermaidSvg, validateSource } from "./editor/mermaid-runtime";
+import { getBrowserStorage } from "./editor/browser-storage";
+import { commitValidatedSource } from "./editor/source-edit";
+import { useDocumentSession } from "./editor/use-document-session";
 import { SemanticVisualEditor } from "./semantic-visual-editor";
 import { GanttCreateDialog } from "./gantt-create-dialog";
 import { GanttItemProperties } from "./gantt-item-properties";
-import { formatGanttSource, ganttExcludesWeekendsFromSource, ganttInclusiveEndDatesFromSource, ganttItemAtLine, ganttTaskSchedule, ganttWeekdayFromSource, GanttWeekday, moveGanttTaskInOrder, moveGanttTaskInTime, normaliseGanttTaskIds, parseGanttSource, resizeGanttTask, setGanttExcludeWeekends, setGanttInclusiveEndDates, setGanttWeekStart, snappedGanttDragDelta } from "./gantt-source";
-import { accessiblePolishedTextColour, DEFAULT_POLISHED_STYLE, normalisePolishedStyle, polishedTextRoles, POLISHED_THEME_OPTIONS, POLISHED_THEME_PREVIEWS, PolishedCustomColours, PolishedStyle, supportsPolishedDiagram } from "./beautiful-mermaid-config";
+import { ganttExcludesWeekendsFromSource, ganttInclusiveEndDatesFromSource, ganttItemAtLine, ganttTaskSchedule, ganttWeekdayFromSource, GanttWeekday, moveGanttTaskInOrder, moveGanttTaskInTime, parseGanttSource, resizeGanttTask, setGanttExcludeWeekends, setGanttInclusiveEndDates, setGanttWeekStart, snappedGanttDragDelta } from "./gantt-source";
+import { accessiblePolishedTextColour, DEFAULT_POLISHED_STYLE, normalisePolishedStyle, polishedTextRoles, PolishedStyle, POLISHED_THEME_OPTIONS, POLISHED_THEME_PREVIEWS, PolishedCustomColours, supportsPolishedDiagram } from "./beautiful-mermaid-config";
 import { layoutFlowchart } from "./flowchart-layout";
-import { appendFlowchartStatements, appendFlowchartSubgraph, flowchartNodeIds, flowchartRelationships, moveFlowchartNodeToSubgraph, parseFlowchartRelationshipLine, removeFlowchartItems, repairFlowchartEdgeEditArtifacts, updateFlowchartDirection, updateFlowchartEdgeStatement, updateFlowchartNodeStatement, updateFlowchartSubgraphStatement } from "./flowchart-source";
+import { appendFlowchartStatements, appendFlowchartSubgraph, flowchartNodeIds, flowchartRelationships, moveFlowchartNodeToSubgraph, removeFlowchartItems, updateFlowchartDirection, updateFlowchartEdgeStatement, updateFlowchartNodeStatement, updateFlowchartSubgraphStatement } from "./flowchart-source";
 import { layoutCompatibilityError } from "./layout-compatibility";
 import {
   createLocalDiagramId,
@@ -70,21 +77,17 @@ import {
   writeLocalDiagramDocument,
   writeLocalDiagramIndex,
 } from "./local-diagram-library";
-import { flowchartShapePatch, FLOWCHART_SHAPE_GROUPS, FlowchartVisualShape, mermaidShapeClass, selectedFlowchartShape, visualShapeForMermaid } from "./flowchart-shapes";
+import { flowchartShapePatch, FLOWCHART_SHAPE_GROUPS, mermaidShapeClass, selectedFlowchartShape } from "./flowchart-shapes";
 import { diagramNameFromFile, MERMAID_IMPORT_ACCEPT, readImportedMermaid } from "./mermaid-import";
 import { helpForDiagram } from "./mermaid-help";
 import { decorateRenderedStatements, normalizeRenderedSvg, normalizeSvgMarkup } from "./mermaid-rendering";
-import { createRepairProposals, repairEmptyFlowchartNodeLabels, RepairProposal, RepairVersion } from "./mermaid-repair";
-import { applyDiagramStyle, DEFAULT_DIAGRAM_STYLE, DiagramStyle, MermaidLayout, MermaidLook, MermaidTheme, readDiagramStyle } from "./mermaid-style";
+import { createRepairProposals, RepairProposal, RepairVersion } from "./mermaid-repair";
+import { applyDiagramStyle, DEFAULT_DIAGRAM_STYLE, DiagramStyle, MermaidLayout, MermaidLook, MermaidTheme } from "./mermaid-style";
 import { detectDiagramType, MERMAID_DIAGRAM_TYPES, visualModeLabel } from "./mermaid-types";
 import { renderTextDiagram, TextDiagramFormat } from "./unicode-export";
 import { bindRenderedFlowchartEdges } from "./rendered-edge-identity";
 
-type NodeShape = FlowchartVisualShape;
-type EdgeStyle = "solid" | "dashed" | "thick";
 type ThemeMode = "light" | "dark" | "system";
-type SupportedMermaidVersion = "11.16.0" | "10.9.6";
-type MermaidVersionPreference = "auto" | SupportedMermaidVersion;
 type CanvasView = "free" | "mermaid" | "polished";
 type BeautifulPreviewMode = "diagram" | "unicode" | "ascii";
 
@@ -148,35 +151,6 @@ const SOURCE_LINE_SELECTION_PREFIX = "source-line:";
 
 function sourceLineSelection(index: number) {
   return `${SOURCE_LINE_SELECTION_PREFIX}${index}`;
-}
-
-function hasDuplicateRelationshipIds(diagram: Diagram) {
-  const ids = diagram.edges.map((edge) => edge.id);
-  return new Set(ids).size !== ids.length;
-}
-
-function projectSourceBackedFlowchart(diagram: Diagram, source = diagram.source) {
-  if (!source || !/^\s*(?:---[\s\S]*?---\s*)?(?:flowchart|graph)\b/im.test(source)) return diagram;
-  const sourceBacked = { ...diagram, source };
-  const projected = parseMermaid(source, sourceBacked);
-  return projected ? { ...projected, source } : sourceBacked;
-}
-
-function normaliseStoredDiagram(diagram: Diagram) {
-  let normalisedDiagram = diagram;
-  if (diagram.source && /^\s*(?:---[\s\S]*?---\s*)?(?:flowchart|graph)\b/im.test(diagram.source)) {
-    const validLabels = repairEmptyFlowchartNodeLabels(diagram.source);
-    const repaired = repairFlowchartEdgeEditArtifacts(validLabels);
-    // Mermaid is authoritative for every source-backed flowchart. Persisted
-    // node positions and appearance remain useful inputs to the projection,
-    // but generated node/relationship ids must always be rebuilt from source.
-    // Otherwise an older cache can contain duplicate edge ids, causing two
-    // unrelated rendered paths to share one React selection identity.
-    normalisedDiagram = projectSourceBackedFlowchart(diagram, repaired.source);
-  }
-  if (!normalisedDiagram.source || !/^\s*gantt\b/im.test(normalisedDiagram.source)) return normalisedDiagram;
-  const normalised = formatGanttSource(normaliseGanttTaskIds(normalisedDiagram.source).source);
-  return normalised === normalisedDiagram.source ? normalisedDiagram : { ...normalisedDiagram, source: normalised };
 }
 
 function sourceLineFromSelection(value: string | undefined) {
@@ -274,32 +248,6 @@ type EditorPreferences = {
   showShortcutHints: boolean;
 };
 
-type DiagramNode = {
-  id: string;
-  label: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  shape: NodeShape;
-  color: string;
-  textColor: string;
-  groupId?: string;
-  mermaidShape?: string;
-};
-
-type DiagramEdge = {
-  id: string;
-  from: string;
-  to: string;
-  label: string;
-  style: EdgeStyle;
-  arrow?: boolean;
-  sourceOccurrence?: number;
-};
-
-type DiagramGroup = { id: string; label: string };
-
 type MarqueeSelection = {
   startX: number;
   startY: number;
@@ -345,20 +293,6 @@ type PendingViewAnchor = {
   targetView: CanvasView;
 };
 
-type Diagram = {
-  name: string;
-  direction: "LR" | "TB";
-  source?: string;
-  mermaidVersion?: MermaidVersionPreference;
-  detectedMermaidVersion?: SupportedMermaidVersion;
-  renderProfile?: "dokuwiki";
-  style?: DiagramStyle;
-  polishedStyle?: PolishedStyle;
-  nodes: DiagramNode[];
-  edges: DiagramEdge[];
-  groups: DiagramGroup[];
-};
-
 const COLORS = ["#ffffff", "#fffdfa", "#fde8f1", "#e6f8f1", "#fff1da", "#e9f2ff", "#ffe9ee", "#e8f8fb", "#f2f3f5"];
 const BOARD_WIDTH = 3200;
 const BOARD_HEIGHT = 2200;
@@ -367,7 +301,6 @@ const MIN_ZOOM = 0.25;
 const MIN_FIT_ZOOM = 0.04;
 const MAX_ZOOM = 2.4;
 const GRID_SIZE = 20;
-const LATEST_MERMAID_VERSION: SupportedMermaidVersion = "11.16.0";
 const DEFAULT_PREFERENCES: EditorPreferences = {
   theme: "light",
   showGrid: true,
@@ -415,7 +348,7 @@ function layoutOptionsForDiagram(diagramTypeId: string) {
 
 function readStoredObject(key: string) {
   try {
-    const value = localStorage.getItem(key);
+    const value = getBrowserStorage().getItem(key);
     if (!value) return null;
     const parsed: unknown = JSON.parse(value);
     return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
@@ -425,7 +358,7 @@ function readStoredObject(key: string) {
 }
 
 function writeStoredValue(key: string, value: string) {
-  try { localStorage.setItem(key, value); } catch { /* local persistence is best-effort */ }
+  try { getBrowserStorage().setItem(key, value); } catch { /* local persistence is best-effort */ }
 }
 
 type TourStep = {
@@ -462,336 +395,6 @@ function simpleSourceDiff(before: string, after: string) {
   return [...removed.slice(0, 8), ...added.slice(0, 8)].join("\n") || "Source formatting will be normalised.";
 }
 
-function detectMermaidVersion(source: string) {
-  const declaredVersion = source.match(/%%\s*mermaid(?:-|\s+)version\s*[:=]\s*v?(\d+)(?:\.(\d+))?(?:\.(\d+))?/i);
-  if (declaredVersion?.[1] && Number(declaredVersion[1]) <= 10) {
-    return { recommended: "10.9.6" as const, minimum: "10.x", label: "Declared Mermaid 10.x source" };
-  }
-  if (/@\{\s*[^}]*\bshape\s*:/m.test(source)) {
-    return { recommended: LATEST_MERMAID_VERSION, minimum: "11.3.0", label: "Mermaid 11.3+ expanded-shape syntax" };
-  }
-  const detectedType = detectDiagramType(source);
-  return { recommended: LATEST_MERMAID_VERSION, minimum: "10.0.0", label: `${detectedType?.label || "Mermaid"} syntax` };
-}
-
-function resolvedMermaidVersion(diagram: Diagram): SupportedMermaidVersion {
-  const preference = diagram.mermaidVersion || "auto";
-  return preference === "auto" ? (diagram.detectedMermaidVersion || LATEST_MERMAID_VERSION) : preference;
-}
-
-type MermaidEngine = typeof import("mermaid").default | typeof import("mermaid-v10").default;
-
-const mermaidFeaturePromises = new WeakMap<object, Map<string, Promise<void>>>();
-
-async function ensureMermaidFeature(mermaid: MermaidEngine, feature: string, setup: () => Promise<void>) {
-  let features = mermaidFeaturePromises.get(mermaid);
-  if (!features) {
-    features = new Map();
-    mermaidFeaturePromises.set(mermaid, features);
-  }
-  let pending = features.get(feature);
-  if (!pending) {
-    pending = setup();
-    features.set(feature, pending);
-  }
-  try {
-    await pending;
-  } catch (error) {
-    features.delete(feature);
-    throw error;
-  }
-}
-
-async function loadMermaid(version: SupportedMermaidVersion, diagramTypeId?: string, layout?: MermaidLayout) {
-  const mermaid = version === "10.9.6" ? (await import("mermaid-v10")).default : (await import("mermaid")).default;
-  if (version !== "10.9.6" && (layout === "elk" || layout === "tidy-tree")) {
-    await ensureMermaidFeature(mermaid, layout, async () => {
-      const definitions = layout === "elk"
-        ? (await import("@mermaid-js/layout-elk")).default
-        : (await import("@mermaid-js/layout-tidy-tree")).default;
-      (mermaid as typeof import("mermaid").default).registerLayoutLoaders(definitions);
-    });
-  }
-  if (diagramTypeId === "zenuml") {
-    await ensureMermaidFeature(mermaid, "zenuml", async () => {
-      const zenuml = (await import("@mermaid-js/mermaid-zenuml")).default;
-      await mermaid.registerExternalDiagrams([zenuml as never]);
-    });
-  }
-  return mermaid;
-}
-
-async function renderMermaidSvg(mermaid: Awaited<ReturnType<typeof loadMermaid>>, id: string, source: string, renderProfileClass = "", renderWidth = 1200) {
-  const renderContainer = document.createElement("div");
-  renderContainer.className = renderProfileClass;
-  renderContainer.style.cssText = `position:fixed;left:-100000px;top:0;width:${renderWidth}px;visibility:hidden;pointer-events:none`;
-  document.body.appendChild(renderContainer);
-  try {
-    return await mermaid.render(id, source, renderContainer);
-  } finally {
-    renderContainer.remove();
-  }
-}
-
-const initialDiagram: Diagram = {
-  name: "Checkout flow",
-  direction: "LR",
-  mermaidVersion: "auto",
-  detectedMermaidVersion: LATEST_MERMAID_VERSION,
-  style: DEFAULT_DIAGRAM_STYLE,
-  groups: [
-    { id: "checkout", label: "Checkout" },
-    { id: "fulfilment", label: "Fulfilment" },
-  ],
-  nodes: [
-    { id: "cart", label: "Cart", x: 78, y: 276, width: 126, height: 58, shape: "rounded", color: "#fffdfa", textColor: "#24232a" },
-    { id: "details", label: "Customer details", x: 292, y: 182, width: 164, height: 62, shape: "rectangle", color: "#fde8f1", textColor: "#282332", groupId: "checkout" },
-    { id: "payment", label: "Payment", x: 292, y: 332, width: 164, height: 62, shape: "rectangle", color: "#e9f2ff", textColor: "#242b36", groupId: "checkout" },
-    { id: "approved", label: "Approved?", x: 535, y: 257, width: 110, height: 96, shape: "diamond", color: "#fff1da", textColor: "#332b20" },
-    { id: "order", label: "Create order", x: 730, y: 182, width: 160, height: 62, shape: "rectangle", color: "#e6f8f1", textColor: "#1f2e28", groupId: "fulfilment" },
-    { id: "email", label: "Send confirmation", x: 730, y: 332, width: 160, height: 62, shape: "rectangle", color: "#e8f8fb", textColor: "#1e2f32", groupId: "fulfilment" },
-    { id: "done", label: "Done", x: 976, y: 276, width: 76, height: 76, shape: "circle", color: "#24232a", textColor: "#ffffff" },
-  ],
-  edges: [
-    { id: "e1", from: "cart", to: "details", label: "checkout", style: "solid" },
-    { id: "e2", from: "cart", to: "payment", label: "", style: "solid" },
-    { id: "e3", from: "details", to: "approved", label: "", style: "solid" },
-    { id: "e4", from: "payment", to: "approved", label: "", style: "solid" },
-    { id: "e5", from: "approved", to: "order", label: "yes", style: "solid" },
-    { id: "e6", from: "approved", to: "payment", label: "no", style: "dashed" },
-    { id: "e7", from: "order", to: "email", label: "", style: "solid" },
-    { id: "e8", from: "email", to: "done", label: "", style: "solid" },
-  ],
-};
-
-const clone = (diagram: Diagram): Diagram => JSON.parse(JSON.stringify(diagram));
-
-function safeLabel(label: string) {
-  const escaped = label.replaceAll('"', "'").replaceAll("\n", " ");
-  return escaped.trim() ? escaped : " ";
-}
-
-function nodeSyntax(node: DiagramNode) {
-  const label = safeLabel(node.label);
-  if (node.mermaidShape) return `${node.id}@{ shape: ${node.mermaidShape}, label: "${label}" }`;
-  switch (node.shape) {
-    case "rounded":
-      return `${node.id}(["${label}"])`;
-    case "diamond":
-      return `${node.id}{"${label}"}`;
-    case "circle":
-      return `${node.id}(("${label}"))`;
-    case "hexagon":
-      return `${node.id}{{"${label}"}}`;
-    case "document":
-      return `${node.id}@{ shape: doc, label: "${label}" }`;
-    case "framed":
-      return `${node.id}@{ shape: fr-rect, label: "${label}" }`;
-    default:
-      return `${node.id}["${label}"]`;
-  }
-}
-
-function edgeSyntax(edge: DiagramEdge) {
-  const link = edge.arrow === false
-    ? (edge.style === "dashed" ? "-.-" : edge.style === "thick" ? "===" : "---")
-    : (edge.style === "dashed" ? "-.->" : edge.style === "thick" ? "==>" : "-->");
-  const label = edge.label ? `|"${safeLabel(edge.label)}"|` : "";
-  return `${edge.from} ${link}${label} ${edge.to}`;
-}
-
-function nodeStyleSyntax(node: DiagramNode) {
-  return `style ${node.id} fill:${node.color},stroke:#77737f,color:${node.textColor},stroke-width:1.5px`;
-}
-
-function toMermaid(diagram: Diagram) {
-  const lines = [`flowchart ${diagram.direction}`];
-  const grouped = new Set<string>();
-
-  diagram.groups.forEach((group) => {
-    const children = diagram.nodes.filter((node) => node.groupId === group.id);
-    if (!children.length) return;
-    lines.push(`  subgraph ${group.id}["${safeLabel(group.label)}"]`);
-    children.forEach((node) => {
-      grouped.add(node.id);
-      lines.push(`    ${nodeSyntax(node)}`);
-    });
-    lines.push("  end");
-  });
-
-  diagram.nodes.filter((node) => !grouped.has(node.id)).forEach((node) => lines.push(`  ${nodeSyntax(node)}`));
-  diagram.edges.forEach((edge) => lines.push(`  ${edgeSyntax(edge)}`));
-  diagram.nodes.forEach((node) => lines.push(`  ${nodeStyleSyntax(node)}`));
-  return lines.join("\n");
-}
-
-function parseMermaid(source: string, previous: Diagram): Diagram | null {
-  const lines = source.split("\n").map((line) => line.trim()).filter(Boolean);
-  const header = lines.find((line) => /^(flowchart|graph)(?:\s+(LR|RL|TB|TD|BT))?$/.test(line));
-  if (!header) return null;
-
-  const sourceDirection = header.match(/\s(LR|RL|TB|TD|BT)$/)?.[1];
-  const direction: "LR" | "TB" = sourceDirection === "LR" || sourceDirection === "RL" ? "LR" : "TB";
-  const nodes = new Map<string, DiagramNode>();
-  const edges: DiagramEdge[] = [];
-  const groups: DiagramGroup[] = [];
-  const styles = new Map<string, { color: string; textColor: string }>();
-  const edgeOccurrences = new Map<string, number>();
-  let currentGroup: string | undefined;
-
-  const legacyPatterns: Array<[NodeShape, RegExp]> = [
-    ["rounded", /^([A-Za-z_][\w-]*)\(\["?(.*?)"?\]\)$/],
-    ["circle", /^([A-Za-z_][\w-]*)\(\("?(.*?)"?\)\)$/],
-    ["hexagon", /^([A-Za-z_][\w-]*)\{\{"?(.*?)"?\}\}$/],
-    ["diamond", /^([A-Za-z_][\w-]*)\{"?(.*?)"?\}$/],
-    ["rectangle", /^([A-Za-z_][\w-]*)\["?(.*?)"?\]$/],
-  ];
-
-  const shapeFromMermaid = (shape: string): NodeShape => {
-    return visualShapeForMermaid(shape);
-  };
-
-  const addNode = (id: string, label = id, shape: NodeShape = "rectangle", explicit = false, mermaidShape?: string) => {
-    const estimatedLines = Math.max(1, Math.ceil(label.length / 34));
-    const dimensions = shape === "circle"
-      ? { width: 88, height: 88 }
-      : shape === "diamond"
-        ? { width: Math.min(190, Math.max(126, 92 + label.length * 2)), height: Math.min(138, Math.max(102, 70 + estimatedLines * 19)) }
-        : { width: Math.min(280, Math.max(150, 92 + Math.min(label.length, 34) * 4.5)), height: Math.min(128, Math.max(62, 32 + estimatedLines * 20)) };
-    const existing = nodes.get(id);
-    if (existing) {
-      if (explicit) nodes.set(id, { ...existing, ...dimensions, label, shape, mermaidShape, groupId: currentGroup ?? existing.groupId });
-      return;
-    }
-    const old = previous.nodes.find((node) => node.id === id);
-    nodes.set(id, old ? { ...old, ...dimensions, label, shape, mermaidShape, groupId: currentGroup } : {
-      id, label, shape, mermaidShape, groupId: currentGroup,
-      x: 0, y: 0,
-      ...dimensions,
-      color: "#ffffff", textColor: "#24232a",
-    });
-  };
-
-  const parseNode = (value: string, explicit = true) => {
-    const text = value.trim().replace(/;$/, "").trimEnd();
-    const expanded = text.match(/^([A-Za-z_][\w-]*)@\{\s*(.*?)\s*\}$/);
-    if (expanded) {
-      const shape = expanded[2].match(/\bshape\s*:\s*["']?([\w-]+)["']?/)?.[1] || "rect";
-      const label = expanded[2].match(/\blabel\s*:\s*"((?:\\.|[^"])*)"/)?.[1]?.replaceAll('\\"', '"') || expanded[1];
-      addNode(expanded[1], label, shapeFromMermaid(shape), explicit, shape);
-      return expanded[1];
-    }
-    for (const [shape, pattern] of legacyPatterns) {
-      const match = text.match(pattern);
-      if (match) {
-        addNode(match[1], match[2], shape, explicit);
-        return match[1];
-      }
-    }
-    const plain = text.match(/^([A-Za-z_][\w-]*)$/);
-    if (plain) {
-      addNode(plain[1], plain[1], "rectangle", false);
-      return plain[1];
-    }
-    return null;
-  };
-
-  const addParsedEdge = (fromExpression: string, connector: string, toExpression: string, label = "") => {
-    const from = parseNode(fromExpression);
-    const to = parseNode(toExpression);
-    if (!from || !to) return;
-    const endpointKey = `${from}\u0000${to}`;
-    const sourceOccurrence = edgeOccurrences.get(endpointKey) || 0;
-    edgeOccurrences.set(endpointKey, sourceOccurrence + 1);
-    edges.push({
-      id: `e${edges.length + 1}`,
-      from,
-      to,
-      label,
-      style: connector.includes("==") ? "thick" : /-\.+/.test(connector) ? "dashed" : "solid",
-      arrow: connector.includes(">"),
-      sourceOccurrence,
-    });
-  };
-
-  const parseEdgeLine = (line: string) => {
-    const relationship = parseFlowchartRelationshipLine(line);
-    if (!relationship) return false;
-    relationship.edges.forEach((edge) => addParsedEdge(edge.fromExpression, edge.connector, edge.toExpression, edge.label));
-    return true;
-  };
-
-  lines.forEach((line) => {
-    if (line === header || line.startsWith("%%") || /^direction\s+(LR|RL|TB|TD|BT)$/.test(line)) return;
-    const groupMatch = line.match(/^subgraph\s+([A-Za-z_][\w-]*)\["?(.*?)"?\]$/);
-    if (groupMatch) {
-      currentGroup = groupMatch[1];
-      groups.push({ id: groupMatch[1], label: groupMatch[2] });
-      return;
-    }
-    if (line === "end") {
-      currentGroup = undefined;
-      return;
-    }
-    const styleMatch = line.match(/^style\s+([A-Za-z_][\w-]*)\s+fill:(#[\da-fA-F]{6}).*color:(#[\da-fA-F]{6})/);
-    if (styleMatch) {
-      styles.set(styleMatch[1], { color: styleMatch[2], textColor: styleMatch[3] });
-      return;
-    }
-    if (parseEdgeLine(line)) return;
-    parseNode(line);
-  });
-
-  if (!nodes.size) return null;
-  styles.forEach((style, id) => {
-    const node = nodes.get(id);
-    if (node) nodes.set(id, { ...node, ...style });
-  });
-  const parsedNodes = [...nodes.values()];
-  const positions = layoutFlowchart(parsedNodes, edges, direction);
-  const preserveStoredPositions = previous.source === source && previous.nodes.length > 0;
-  return {
-    ...previous,
-    direction,
-    nodes: parsedNodes.map((node) => {
-      const stored = preserveStoredPositions ? previous.nodes.find((candidate) => candidate.id === node.id) : undefined;
-      return { ...node, ...(stored ? { x: stored.x, y: stored.y } : positions.get(node.id)) };
-    }),
-    edges,
-    groups,
-  };
-}
-
-function restoreStoredDiagram(value: unknown): Diagram | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const restored = value as Partial<Diagram>;
-  if (!Array.isArray(restored.nodes) || !Array.isArray(restored.edges) || !Array.isArray(restored.groups)) return null;
-  const diagram = restored as Diagram;
-  const restoredFlowchart = diagram.source && detectDiagramType(diagram.source)?.id === "flowchart"
-    ? parseMermaid(diagram.source, diagram)
-    : null;
-  return {
-    ...(restoredFlowchart ? { ...restoredFlowchart, source: diagram.source } : diagram),
-    name: typeof diagram.name === "string" && diagram.name.trim() ? diagram.name : "Untitled diagram",
-    style: { ...DEFAULT_DIAGRAM_STYLE, ...(diagram.style || {}) },
-    polishedStyle: normalisePolishedStyle(diagram.polishedStyle),
-  };
-}
-
-function createBlankDiagram(name = "Untitled diagram"): Diagram {
-  return {
-    name,
-    direction: "LR",
-    mermaidVersion: "auto",
-    detectedMermaidVersion: LATEST_MERMAID_VERSION,
-    style: { ...DEFAULT_DIAGRAM_STYLE },
-    polishedStyle: normalisePolishedStyle(DEFAULT_POLISHED_STYLE),
-    nodes: [],
-    edges: [],
-    groups: [],
-  };
-}
-
 function uniqueLocalDiagramName(name: string, documents: LocalDiagramSummary[]) {
   const existing = new Set(documents.map((document) => document.name.trim().toLocaleLowerCase()));
   if (!existing.has(name.toLocaleLowerCase())) return name;
@@ -821,7 +424,8 @@ function IconButton({ label, shortcut, active, disabled, onClick, children, clas
 }
 
 export function MermaidEditor() {
-  const [diagram, setDiagram] = useState<Diagram>(initialDiagram);
+  const { session: documentSession, document: diagram } = useDocumentSession(initialDiagram);
+  const { set: setDiagram, commit, checkpoint, undo, redo } = documentSession;
   const [selected, setSelected] = useState<string[]>(["approved"]);
   const [viewMode, setViewMode] = useState<CanvasView>("mermaid");
   const [zoom, setZoom] = useState(0.92);
@@ -876,8 +480,6 @@ export function MermaidEditor() {
   const [tourRect, setTourRect] = useState<DOMRect | null>(null);
   const [marquee, setMarquee] = useState<MarqueeSelection | null>(null);
   const [ganttBarControls, setGanttBarControls] = useState<GanttBarControls | null>(null);
-  const history = useRef<Diagram[]>([]);
-  const future = useRef<Diagram[]>([]);
   const boardRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const mermaidStageRef = useRef<HTMLDivElement>(null);
@@ -907,7 +509,6 @@ export function MermaidEditor() {
   const localDiagramCacheRef = useRef(new Map<string, Diagram>());
   const importInputRef = useRef<HTMLInputElement>(null);
   const sourceLastEditAtRef = useRef(0);
-  const diagramRef = useRef(diagram);
 
   const diagramStyle = diagram.style || DEFAULT_DIAGRAM_STYLE;
   const polishedStyle = useMemo(() => normalisePolishedStyle(diagram.polishedStyle), [diagram.polishedStyle]);
@@ -1065,11 +666,11 @@ export function MermaidEditor() {
     };
     const nextIndex = updateLocalDiagramIndex(currentIndex, summary, makeActive ? id : currentIndex.activeId);
     localDiagramCacheRef.current.set(id, clone(value));
-    const stored = writeLocalDiagramDocument(localStorage, {
+    const stored = writeLocalDiagramDocument(getBrowserStorage(), {
       version: 1,
       ...summary,
       diagram: value,
-    }) && writeLocalDiagramIndex(localStorage, nextIndex);
+    }) && writeLocalDiagramIndex(getBrowserStorage(), nextIndex);
     replaceLocalDiagramIndex(nextIndex);
     setLocalStorageStatus(stored ? "saved" : "unavailable");
     return stored;
@@ -1077,10 +678,7 @@ export function MermaidEditor() {
 
   const resetEditorForLocalDiagram = useCallback((next: Diagram) => {
     const normalisedNext = normaliseStoredDiagram(next);
-    history.current = [];
-    future.current = [];
-    diagramRef.current = normalisedNext;
-    setDiagram(normalisedNext);
+    documentSession.reset(normalisedNext);
     setSelected(normalisedNext.nodes[0] ? [normalisedNext.nodes[0].id] : []);
     edgeCounter.current = Math.max(0, ...normalisedNext.edges.map((edge) => Number(edge.id.match(/^e(\d+)$/)?.[1]) || 0)) + 1;
     setConnectionStart(null);
@@ -1099,6 +697,12 @@ export function MermaidEditor() {
     setPolishedRenderError("");
     setRepairOpen(false);
     setRepairOptions([]);
+    setRepairLoading(false);
+    setEditingSourceBusy(false);
+    setGanttCreateOpen(false);
+    ganttDragCleanupRef.current?.();
+    ganttBarDragRef.current = null;
+    pendingGanttEdgeAnchorRef.current = null;
     shouldFitMermaidRef.current = true;
     shouldFitPolishedRef.current = true;
     shouldFitFreeformRef.current = true;
@@ -1108,7 +712,7 @@ export function MermaidEditor() {
       setViewMode("mermaid");
       lastEditorViewRef.current = "mermaid";
     }
-  }, [viewMode]);
+  }, [documentSession, viewMode]);
 
   const activateLocalDiagram = useCallback((id: string, persistCurrent = true) => {
     const currentId = localDiagramIndexRef.current.activeId;
@@ -1116,9 +720,9 @@ export function MermaidEditor() {
       setLocalDiagramMenuOpen(false);
       return;
     }
-    if (persistCurrent && currentId) persistLocalDiagram(currentId, diagramRef.current);
+    if (persistCurrent && currentId) persistLocalDiagram(currentId, documentSession.getSnapshot());
     const stored = localDiagramCacheRef.current.get(id)
-      ?? readLocalDiagramDocument<Diagram>(localStorage, id)?.diagram;
+      ?? readLocalDiagramDocument<Diagram>(getBrowserStorage(), id)?.diagram;
     const restored = restoreStoredDiagram(stored);
     if (!restored) {
       notify("That local diagram could not be opened");
@@ -1126,18 +730,18 @@ export function MermaidEditor() {
     }
     localDiagramCacheRef.current.set(id, clone(restored));
     const nextIndex = { ...localDiagramIndexRef.current, activeId: id };
-    const indexStored = writeLocalDiagramIndex(localStorage, nextIndex);
+    const indexStored = writeLocalDiagramIndex(getBrowserStorage(), nextIndex);
     replaceLocalDiagramIndex(nextIndex);
     if (!indexStored) setLocalStorageStatus("unavailable");
     resetEditorForLocalDiagram(restored);
     setLocalDiagramMenuOpen(false);
     setPendingLocalDeleteId(null);
     notify(`Opened ${restored.name}`);
-  }, [notify, persistLocalDiagram, replaceLocalDiagramIndex, resetEditorForLocalDiagram]);
+  }, [documentSession, notify, persistLocalDiagram, replaceLocalDiagramIndex, resetEditorForLocalDiagram]);
 
   const createLocalDiagram = useCallback(() => {
     const currentId = localDiagramIndexRef.current.activeId;
-    if (currentId) persistLocalDiagram(currentId, diagramRef.current);
+    if (currentId) persistLocalDiagram(currentId, documentSession.getSnapshot());
     const name = uniqueLocalDiagramName("Untitled diagram", localDiagramIndexRef.current.documents);
     const next = createBlankDiagram(name);
     const id = createLocalDiagramId();
@@ -1147,21 +751,21 @@ export function MermaidEditor() {
     setPendingLocalDeleteId(null);
     notify("Created a new local diagram");
     requestAnimationFrame(() => documentNameRef.current?.select());
-  }, [notify, persistLocalDiagram, resetEditorForLocalDiagram]);
+  }, [documentSession, notify, persistLocalDiagram, resetEditorForLocalDiagram]);
 
   const duplicateLocalDiagram = useCallback(() => {
     const currentId = localDiagramIndexRef.current.activeId;
-    if (currentId) persistLocalDiagram(currentId, diagramRef.current);
-    const baseName = `${diagramRef.current.name.trim() || "Untitled diagram"} copy`;
+    if (currentId) persistLocalDiagram(currentId, documentSession.getSnapshot());
+    const baseName = `${documentSession.getSnapshot().name.trim() || "Untitled diagram"} copy`;
     const name = uniqueLocalDiagramName(baseName, localDiagramIndexRef.current.documents);
-    const next = { ...clone(diagramRef.current), name };
+    const next = { ...clone(documentSession.getSnapshot()), name };
     const id = createLocalDiagramId();
     persistLocalDiagram(id, next);
     resetEditorForLocalDiagram(next);
     setLocalDiagramMenuOpen(false);
     setPendingLocalDeleteId(null);
     notify("Duplicated the local diagram");
-  }, [notify, persistLocalDiagram, resetEditorForLocalDiagram]);
+  }, [documentSession, notify, persistLocalDiagram, resetEditorForLocalDiagram]);
 
   const renameLocalDiagram = useCallback(() => {
     setLocalDiagramMenuOpen(false);
@@ -1176,18 +780,18 @@ export function MermaidEditor() {
     const currentIndex = localDiagramIndexRef.current;
     const deleted = currentIndex.documents.find((document) => document.id === id);
     const remaining = currentIndex.documents.filter((document) => document.id !== id);
-    removeLocalDiagramDocument(localStorage, id);
+    removeLocalDiagramDocument(getBrowserStorage(), id);
     localDiagramCacheRef.current.delete(id);
 
     if (remaining.length) {
       const activeId = id === currentIndex.activeId ? remaining[0].id : currentIndex.activeId;
       const nextIndex: LocalDiagramIndex = { version: 1, activeId, documents: remaining };
-      const stored = writeLocalDiagramIndex(localStorage, nextIndex);
+      const stored = writeLocalDiagramIndex(getBrowserStorage(), nextIndex);
       replaceLocalDiagramIndex(nextIndex);
       if (!stored) setLocalStorageStatus("unavailable");
       if (id === currentIndex.activeId) {
         const nextValue = localDiagramCacheRef.current.get(activeId)
-          ?? readLocalDiagramDocument<Diagram>(localStorage, activeId)?.diagram;
+          ?? readLocalDiagramDocument<Diagram>(getBrowserStorage(), activeId)?.diagram;
         const restored = restoreStoredDiagram(nextValue);
         if (restored) resetEditorForLocalDiagram(restored);
       }
@@ -1207,10 +811,6 @@ export function MermaidEditor() {
   }, [selected]);
 
   useEffect(() => {
-    diagramRef.current = diagram;
-  }, [diagram]);
-
-  useEffect(() => {
     if (!diagram.source || !hasDuplicateRelationshipIds(diagram)) return;
     let cancelled = false;
     // Repair stale in-memory caches as well as persisted diagrams. Deferring
@@ -1222,7 +822,7 @@ export function MermaidEditor() {
       setSelected([]);
     });
     return () => { cancelled = true; };
-  }, [diagram]);
+  }, [diagram, setDiagram]);
 
   useEffect(() => () => ganttDragCleanupRef.current?.(), []);
 
@@ -1248,31 +848,6 @@ export function MermaidEditor() {
     return true;
   }, []);
 
-  const checkpoint = useCallback(() => {
-    history.current.push(clone(diagram));
-    if (history.current.length > 60) history.current.shift();
-    future.current = [];
-  }, [diagram]);
-
-  const commit = useCallback((update: (current: Diagram) => Diagram) => {
-    checkpoint();
-    setDiagram((current) => update(current));
-  }, [checkpoint]);
-
-  const undo = useCallback(() => {
-    const previous = history.current.pop();
-    if (!previous) return;
-    future.current.push(clone(diagram));
-    setDiagram(previous);
-  }, [diagram]);
-
-  const redo = useCallback(() => {
-    const next = future.current.pop();
-    if (!next) return;
-    history.current.push(clone(diagram));
-    setDiagram(next);
-  }, [diagram]);
-
   useEffect(() => {
     const savedPreferences = readStoredObject("mermade-preferences");
     let showWelcome = true;
@@ -1280,7 +855,7 @@ export function MermaidEditor() {
     let index: LocalDiagramIndex;
     let storageAvailable = false;
     try {
-      const library = initialiseLocalDiagramLibrary(localStorage, restored, restored.name);
+      const library = initialiseLocalDiagramLibrary(getBrowserStorage(), restored, restored.name);
       restored = normaliseStoredDiagram(restoreStoredDiagram(library.document?.diagram) ?? restored);
       index = library.index;
       storageAvailable = library.storageAvailable;
@@ -1289,12 +864,11 @@ export function MermaidEditor() {
       const id = createLocalDiagramId(now);
       index = { version: 1, activeId: id, documents: [{ id, name: restored.name, createdAt: now, updatedAt: now }] };
     }
-    try { showWelcome = !localStorage.getItem(ONBOARDING_KEY); } catch { /* private browsing can block storage */ }
+    try { showWelcome = !getBrowserStorage().getItem(ONBOARDING_KEY); } catch { /* private browsing can block storage */ }
     queueMicrotask(() => {
-      diagramRef.current = restored;
       localDiagramIndexRef.current = index;
       localDiagramCacheRef.current.set(index.activeId, clone(restored));
-      setDiagram(restored);
+      documentSession.reset(restored);
       setSelected(restored.nodes[0] ? [restored.nodes[0].id] : []);
       setLocalDiagramIndex(index);
       setLocalStorageStatus(storageAvailable ? "saved" : "unavailable");
@@ -1302,7 +876,7 @@ export function MermaidEditor() {
       if (showWelcome) setWelcomeOpen(true);
       setStorageReady(true);
     });
-  }, []);
+  }, [documentSession]);
 
   useEffect(() => {
     if (tourStep === null) return;
@@ -1382,17 +956,17 @@ export function MermaidEditor() {
       const now = Date.now();
       const summary: LocalDiagramSummary = {
         id,
-        name: diagramRef.current.name.trim() || "Untitled diagram",
+        name: documentSession.getSnapshot().name.trim() || "Untitled diagram",
         createdAt: previous?.createdAt ?? now,
         updatedAt: now,
       };
       const nextIndex = updateLocalDiagramIndex(currentIndex, summary, id);
-      writeLocalDiagramDocument(localStorage, { version: 1, ...summary, diagram: diagramRef.current });
-      writeLocalDiagramIndex(localStorage, nextIndex);
+      writeLocalDiagramDocument(getBrowserStorage(), { version: 1, ...summary, diagram: documentSession.getSnapshot() });
+      writeLocalDiagramIndex(getBrowserStorage(), nextIndex);
     };
     window.addEventListener("pagehide", flushLocalDiagram);
     return () => window.removeEventListener("pagehide", flushLocalDiagram);
-  }, [storageReady]);
+  }, [documentSession, storageReady]);
 
   useEffect(() => {
     if (storageReady) {
@@ -1495,7 +1069,7 @@ export function MermaidEditor() {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
     };
-  }, [diagram.nodes, preferences.snapToGrid, zoom]);
+  }, [diagram.nodes, preferences.snapToGrid, setDiagram, zoom]);
 
   useEffect(() => {
     if (viewMode !== "mermaid" || !mermaidViewRef.current) return;
@@ -1509,19 +1083,13 @@ export function MermaidEditor() {
         return;
       }
       try {
-        const mermaid = await loadMermaid(activeMermaidVersion, activeDiagramType.id, diagramStyle.layout);
-        mermaid.initialize({
-          startOnLoad: false,
-          securityLevel: "strict",
-          flowchart: { htmlLabels: true, curve: "basis", useMaxWidth: false },
-        });
         const renderId = `mermade-view-${mermaidRenderCounter.current++}`;
         // Use a temporary non-React container. Block Diagram measures live DOM,
         // while its debug serialisation cannot traverse React's circular metadata.
         const ganttRenderWidth = activeDiagramType.id === "gantt"
           ? Math.max(1600, scrollRef.current?.clientWidth || 0)
           : 1200;
-        const { svg } = await renderMermaidSvg(mermaid, renderId, source, renderProfileClass, ganttRenderWidth);
+        const { svg } = await renderMermaidSvg({ version: activeMermaidVersion, id: renderId, source, renderProfileClass, renderWidth: ganttRenderWidth });
         if (cancelled) return;
 
         host.innerHTML = svg;
@@ -1538,7 +1106,7 @@ export function MermaidEditor() {
         // produced this SVG. The persisted visual projection may briefly be
         // stale during restoration or Fast Refresh, but it must never make
         // two source relationships share one selectable identity.
-        const currentDiagram = diagramRef.current;
+        const currentDiagram = documentSession.getSnapshot();
         const renderedDiagram = activeDiagramType.id === "flowchart"
           ? projectSourceBackedFlowchart(currentDiagram, source)
           : currentDiagram;
@@ -1583,7 +1151,7 @@ export function MermaidEditor() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [activeDiagramType.id, activeMermaidVersion, currentLayoutCompatibilityError, diagramStyle.layout, renderProfileClass, restoreViewAnchor, source, viewMode]);
+  }, [documentSession, activeDiagramType.id, activeMermaidVersion, currentLayoutCompatibilityError, diagramStyle.layout, renderProfileClass, restoreViewAnchor, source, viewMode]);
 
   useEffect(() => {
     if (viewMode !== "polished" || beautifulPreviewMode !== "diagram" || !polishedSupported || !polishedViewRef.current) return;
@@ -1614,10 +1182,10 @@ export function MermaidEditor() {
           if (element.dataset.id) element.dataset.groupId = element.dataset.id;
         });
         host.querySelectorAll<HTMLElement>(".edge").forEach((element, index) => {
-          const edge = diagramRef.current.edges[index];
+          const edge = documentSession.getSnapshot().edges[index];
           if (edge) element.dataset.edgeId = edge.id;
         });
-        syncRenderedSelection(host, diagramRef.current, []);
+        syncRenderedSelection(host, documentSession.getSnapshot(), []);
 
         setPolishedSize({ width, height });
         setPolishedRenderRevision((revision) => revision + 1);
@@ -1645,7 +1213,7 @@ export function MermaidEditor() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [beautifulPreviewMode, polishedStyle, polishedSupported, source, viewMode]);
+  }, [documentSession, beautifulPreviewMode, polishedStyle, polishedSupported, source, viewMode]);
 
   useEffect(() => {
     if (viewMode !== "polished" || (beautifulPreviewMode !== "unicode" && beautifulPreviewMode !== "ascii")) return;
@@ -1698,8 +1266,8 @@ export function MermaidEditor() {
     if (viewMode !== "mermaid") return;
     const host = mermaidViewRef.current;
     if (!host) return;
-    syncRenderedSelection(host, diagramRef.current, selected);
-  }, [mermaidSize, polishedSize, selected, viewMode]);
+    syncRenderedSelection(host, documentSession.getSnapshot(), selected);
+  }, [documentSession, mermaidSize, polishedSize, selected, viewMode]);
 
   useLayoutEffect(() => {
     const frame = requestAnimationFrame(() => {
@@ -1856,6 +1424,7 @@ export function MermaidEditor() {
   };
 
   const assignNodeToSubgraph = async (nodeId: string, targetSubgraphId: string) => {
+    const ticket = documentSession.beginEdit();
     const targetId = targetSubgraphId || undefined;
     const node = diagram.nodes.find((candidate) => candidate.id === nodeId);
     const target = targetId ? diagram.groups.find((group) => group.id === targetId) : undefined;
@@ -1869,6 +1438,7 @@ export function MermaidEditor() {
         return;
       }
       const error = await validateSource(moved, activeMermaidVersion);
+      if (!documentSession.isCurrent(ticket)) return;
       if (error) {
         notify(`Mermaid could not safely change that subgraph: ${error}`);
         return;
@@ -1941,6 +1511,7 @@ export function MermaidEditor() {
   };
 
   const deleteSelected = async () => {
+    const ticket = documentSession.beginEdit();
     if (!selected.length) return;
     const ids = new Set(selected);
     const selectedEdges = diagram.edges.filter((edge) => ids.has(edge.id));
@@ -2002,6 +1573,7 @@ export function MermaidEditor() {
         }
       }
       const error = await validateSource(candidate, activeMermaidVersion);
+      if (!documentSession.isCurrent(ticket)) return;
       if (error) {
         notify(`Mermaid could not safely delete that selection: ${error}`);
         return;
@@ -2057,6 +1629,7 @@ export function MermaidEditor() {
   };
 
   const changeSourceDraft = (next: string) => {
+    documentSession.invalidatePendingEdits();
     const now = Date.now();
     if (sourceLastEditAtRef.current === 0 || now - sourceLastEditAtRef.current > 900) {
       setSourcePast((current) => [...current.slice(-79), sourceDraft]);
@@ -2068,6 +1641,7 @@ export function MermaidEditor() {
   };
 
   const undoSourceDraft = () => {
+    documentSession.invalidatePendingEdits();
     const previous = sourcePast.at(-1);
     if (previous === undefined) return;
     setSourcePast((current) => current.slice(0, -1));
@@ -2078,6 +1652,7 @@ export function MermaidEditor() {
   };
 
   const redoSourceDraft = () => {
+    documentSession.invalidatePendingEdits();
     const next = sourceFuture[0];
     if (next === undefined) return;
     setSourceFuture((current) => current.slice(1));
@@ -2524,9 +2099,7 @@ export function MermaidEditor() {
 
   const exportSvg = async () => {
     try {
-      const mermaid = await loadMermaid(activeMermaidVersion, activeDiagramType.id, diagramStyle.layout);
-      mermaid.initialize({ startOnLoad: false, securityLevel: "strict", flowchart: { htmlLabels: true, curve: "basis" } });
-      const { svg } = await renderMermaidSvg(mermaid, `mermade-${Date.now()}`, source, renderProfileClass, activeDiagramType.id === "gantt" ? 1600 : 1200);
+      const { svg } = await renderMermaidSvg({ version: activeMermaidVersion, id: `mermade-${Date.now()}`, source, renderProfileClass, renderWidth: activeDiagramType.id === "gantt" ? 1600 : 1200 });
       download(normalizeSvgMarkup(svg, activeDiagramType.id, source), `${diagram.name.toLowerCase().replace(/\W+/g, "-")}.svg`, "image/svg+xml");
       setExportOpen(false);
       notify("SVG exported");
@@ -2580,83 +2153,27 @@ export function MermaidEditor() {
     notify(`${beautifulPreviewMode.toUpperCase()} downloaded`);
   };
 
-  async function validateSource(candidate: string, version: SupportedMermaidVersion) {
-    try {
-      const candidateType = detectDiagramType(candidate);
-      const candidateStyle = readDiagramStyle(candidate);
-      const mermaid = await loadMermaid(version, candidateType?.id, candidateStyle.layout);
-      mermaid.initialize({ startOnLoad: false, securityLevel: "strict" });
-      await mermaid.parse(candidate);
-      return "";
-    } catch (error) {
-      return error instanceof Error ? error.message : "Mermaid rejected this source";
-    }
-  }
-
   const validateAndCommitSource = async (candidate: string, versionOverride?: SupportedMermaidVersion, preserveViewport = false) => {
-    const candidateType = detectDiagramType(candidate);
-    const preparedCandidate = candidateType?.id === "gantt" ? formatGanttSource(normaliseGanttTaskIds(candidate).source) : candidate;
-    const detection = detectMermaidVersion(preparedCandidate);
-    const versionPreference = versionOverride || diagram.mermaidVersion || "auto";
-    if (versionPreference === "10.9.6" && detection.minimum === "11.3.0") {
-      return { ok: false, error: "This source requires Mermaid 11.3+; choose Auto-detect or 11.16.0 in Settings" };
+    const result = await commitValidatedSource(documentSession, candidate, validateSource, versionOverride);
+    if (!result.ok) return result;
+    if (!preserveViewport) {
+      if (result.projectedFlowchart) shouldFitFreeformRef.current = true;
+      shouldFitMermaidRef.current = true;
+      shouldFitPolishedRef.current = true;
     }
-
-    const detectedType = detectDiagramType(preparedCandidate);
-    if (!detectedType) return { ok: false, error: "This Mermaid diagram type is not registered in Mermade" };
-    const nextStyle = readDiagramStyle(preparedCandidate);
-    if (nextStyle.layout === "cose-bilkent" && detectedType.id !== "mindmap") {
-      return { ok: false, error: "Cose Bilkent currently renders only Mindmaps reliably in Mermaid 11.16; choose Dagre, ELK, or Tidy Tree for this diagram" };
+    setTool("select");
+    setConnectionStart(null);
+    setEditingNode(null);
+    setEditingGroup(null);
+    setEditingSourceLine(null);
+    setSelected([]);
+    setInvalidSource("");
+    setSyntaxError("");
+    if (viewMode === "polished" && !supportsPolishedDiagram(result.diagramTypeId)) {
+      lastEditorViewRef.current = "mermaid";
+      setViewMode("mermaid");
     }
-
-    try {
-      const version = versionPreference === "auto" ? detection.recommended : versionPreference;
-      const mermaid = await loadMermaid(version, detectedType.id, nextStyle.layout);
-      mermaid.initialize({ startOnLoad: false, securityLevel: "strict" });
-      await mermaid.parse(preparedCandidate);
-
-      const parsedFlowchart = detectedType.id === "flowchart" ? parseMermaid(preparedCandidate, diagram) : null;
-      if (!preserveViewport) {
-        if (parsedFlowchart) shouldFitFreeformRef.current = true;
-        shouldFitMermaidRef.current = true;
-        shouldFitPolishedRef.current = true;
-      }
-      setTool("select");
-      setConnectionStart(null);
-      setEditingNode(null);
-      setEditingGroup(null);
-      setEditingSourceLine(null);
-      commit((current) => parsedFlowchart ? {
-        ...parsedFlowchart,
-        name: current.name,
-        // Validated Mermaid remains authoritative after paste, import, repair,
-        // or direct source editing. The visual model is a projection used by
-        // the canvases; visual operations patch this source in place.
-        source: preparedCandidate,
-        style: nextStyle,
-        mermaidVersion: versionOverride || current.mermaidVersion,
-        detectedMermaidVersion: detection.recommended,
-      } : {
-        ...current,
-        source: preparedCandidate,
-        style: nextStyle,
-        mermaidVersion: versionOverride || current.mermaidVersion,
-        nodes: [],
-        edges: [],
-        groups: [],
-        detectedMermaidVersion: detection.recommended,
-      });
-      setSelected([]);
-      setInvalidSource("");
-      setSyntaxError("");
-      if (viewMode === "polished" && !supportsPolishedDiagram(detectedType.id)) {
-        lastEditorViewRef.current = "mermaid";
-        setViewMode("mermaid");
-      }
-      return { ok: true, source: preparedCandidate };
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : "Mermaid rejected this source" };
-    }
+    return result;
   };
 
   const applyRenderedStatementEdit = async () => {
@@ -2670,6 +2187,7 @@ export function MermaidEditor() {
     setEditingSourceBusy(true);
     const result = await validateAndCommitSource(lines.join("\n"));
     setEditingSourceBusy(false);
+    if (result.cancelled) return result;
     if (!result.ok) {
       notify(result.error || "Mermaid rejected this statement");
       return;
@@ -2680,6 +2198,7 @@ export function MermaidEditor() {
 
   const applyGanttItemEdit = async (candidate: string, selectedLine: number) => {
     const result = await validateAndCommitSource(candidate);
+    if (result.cancelled) return result;
     if (result.ok) {
       setSelected([sourceLineSelection(selectedLine)]);
       notify("Gantt item updated");
@@ -2689,6 +2208,7 @@ export function MermaidEditor() {
 
   const createGanttItem = async (candidate: string, selectedLine: number) => {
     const result = await validateAndCommitSource(candidate);
+    if (result.cancelled) return result;
     if (result.ok) {
       setSelected([sourceLineSelection(selectedLine)]);
       setGanttCreateOpen(false);
@@ -2834,6 +2354,7 @@ export function MermaidEditor() {
         : resizeGanttTask(source, drag.lineIndex, drag.mode, drag.deltaDays);
       shouldFitMermaidRef.current = false;
       const result = await validateAndCommitSource(updated.source, undefined, true);
+      if (result.cancelled) return result;
       if (!result.ok) throw new Error(result.error || "Mermaid rejected this Gantt adjustment");
       setSelected([sourceLineSelection(updated.lineIndex)]);
       notify(drag.mode === "move" ? "Task moved to the nearest Monday or Wednesday" : "Task duration updated");
@@ -2861,6 +2382,7 @@ export function MermaidEditor() {
       const updated = moveGanttTaskInOrder(source, selectedGanttItem.lineIndex, direction);
       if (updated.source === source) return;
       const result = await validateAndCommitSource(updated.source);
+      if (result.cancelled) return result;
       if (!result.ok) throw new Error(result.error || "Mermaid rejected this ordering change");
       setSelected([sourceLineSelection(updated.lineIndex)]);
       notify(direction < 0 ? "Task moved up" : "Task moved down");
@@ -2871,6 +2393,7 @@ export function MermaidEditor() {
 
   const applySource = async () => {
     const result = await validateAndCommitSource(sourceDraft);
+    if (result.cancelled) return result;
     if (!result.ok) {
       setInvalidSource(sourceDraft);
       setSyntaxError(result.error || "Mermaid rejected this source");
@@ -2913,6 +2436,7 @@ export function MermaidEditor() {
   const updateGanttWeekStart = async (weekday: GanttWeekday) => {
     const candidate = setGanttWeekStart(source, weekday);
     const result = await validateAndCommitSource(candidate);
+    if (result.cancelled) return result;
     if (!result.ok) {
       notify(result.error || "Mermaid rejected this Gantt week configuration");
       return;
@@ -2924,6 +2448,7 @@ export function MermaidEditor() {
   const updateGanttExcludeWeekends = async (excluded: boolean) => {
     const candidate = setGanttExcludeWeekends(source, excluded);
     const result = await validateAndCommitSource(candidate);
+    if (result.cancelled) return result;
     if (!result.ok) {
       notify(result.error || "Mermaid rejected this Gantt weekend configuration");
       return;
@@ -2935,6 +2460,7 @@ export function MermaidEditor() {
   const updateGanttInclusiveEndDates = async (inclusive: boolean) => {
     const candidate = setGanttInclusiveEndDates(source, inclusive);
     const result = await validateAndCommitSource(candidate);
+    if (result.cancelled) return result;
     if (!result.ok) {
       notify(result.error || "Mermaid rejected this Gantt end-date configuration");
       return;
@@ -2967,6 +2493,7 @@ export function MermaidEditor() {
   )?.id;
 
   const openRepairOptions = async () => {
+    const ticket = documentSession.beginEdit();
     const candidate = invalidSource || source;
     setRepairOpen(true);
     setRepairLoading(true);
@@ -2984,10 +2511,12 @@ export function MermaidEditor() {
         version: alternateVersion,
       });
     }
+    if (!documentSession.isCurrent(ticket)) return;
     const validated: RepairProposal[] = [];
     for (const option of generated) {
       const version = option.version || activeMermaidVersion;
       if (await validateSource(option.source, version) === "") validated.push(option);
+      if (!documentSession.isCurrent(ticket)) return;
     }
     setRepairOptions(validated.filter((option, index) => validated.findIndex((candidateOption) => candidateOption.source === option.source && candidateOption.version === option.version) === index));
     setRepairLoading(false);
@@ -2995,6 +2524,7 @@ export function MermaidEditor() {
 
   const applyRepair = async (repair: RepairProposal) => {
     const result = await validateAndCommitSource(repair.source, repair.version);
+    if (result.cancelled) return result;
     if (!result.ok) {
       setSyntaxError(result.error || "Mermaid rejected the proposed repair");
       notify("The repair was not applied because Mermaid rejected it");
@@ -3016,13 +2546,16 @@ export function MermaidEditor() {
       return;
     }
 
+    const ticket = documentSession.beginEdit();
     try {
       const imported = readImportedMermaid(await file.text());
+      if (!documentSession.isCurrent(ticket)) return;
       if (!imported.source) {
         notify(`${file.name} does not contain Mermaid source`);
         return;
       }
       const result = await validateAndCommitSource(imported.source);
+      if (result.cancelled) return result;
       if (!result.ok) {
         setInvalidSource(imported.source);
         setSyntaxError(result.error || "Invalid Mermaid source");
@@ -3053,6 +2586,7 @@ export function MermaidEditor() {
     const remainInBeautiful = viewMode === "polished" && supportsPolishedDiagram(nextType.id);
 
     const result = await validateAndCommitSource(nextType.template);
+    if (result.cancelled) return result;
     if (!result.ok) {
       notify(result.error || `Mermaid could not create the ${nextType.label}`);
       return;
@@ -3065,8 +2599,10 @@ export function MermaidEditor() {
   };
 
   const changeMermaidVersion = async (preference: MermaidVersionPreference) => {
+    const ticket = documentSession.beginEdit();
     const version = preference === "auto" ? detectMermaidVersion(source).recommended : preference;
     const error = await validateSource(source, version);
+    if (!documentSession.isCurrent(ticket)) return;
     if (error) {
       notify(`The current source cannot render with Mermaid ${version}`);
       return;
