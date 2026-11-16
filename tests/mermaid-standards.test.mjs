@@ -815,6 +815,8 @@ test("adding a node preserves existing identities in unprojected inline source",
   for (const [original, label, count] of [
     ["flowchart LR; node1[Keep original]", "Keep original", 2],
     ["flowchart LR; node1-->B", "node1", 3],
+    ["flowchart LR; A--onode1[Keep original]", "Keep original", 3],
+    ["flowchart LR; A--xnode1[Keep original]", "Keep original", 3],
   ]) {
     await t.test(original, async () => {
       const context = await browser.newContext();

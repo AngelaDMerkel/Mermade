@@ -570,11 +570,10 @@ export function appendFlowchartSubgraph(source: string, id: string, label: strin
 
 /** Reserve identifiers even in valid syntax the visual projection cannot parse. */
 export function uniqueFlowchartId(source: string, prefix: "node" | "group") {
-  // Including label/comment tokens is deliberately conservative: skipping a
-  // number is harmless, while redefining an unprojected node changes its data.
-  // Generated IDs never contain hyphens. Split there too so compact Mermaid
-  // connectors (node1-->B, node1---B, node1-.->B) cannot hide a reserved ID.
-  const reserved = new Set(source.match(/[A-Za-z_]\w*/g) || []);
+  // Reserve generated ID patterns even inside labels and larger tokens.
+  // Mermaid joins o/x connector markers directly to target IDs (A--onode1),
+  // so token or word boundaries cannot safely identify every reservation.
+  const reserved = new Set(source.match(new RegExp(`${prefix}\\d+`, "g")) || []);
   let suffix = 1;
   while (reserved.has(`${prefix}${suffix}`)) suffix++;
   return `${prefix}${suffix}`;
