@@ -782,13 +782,16 @@ test("older non-flowchart documents remain recoverable without being rendered or
   try {
     await isolated.addInitScript((source) => {
       localStorage.setItem("mermade-onboarding-v1", "complete");
-      localStorage.setItem("mermade-diagram", JSON.stringify({ name: "Old plan", direction: "LR", source, nodes: [], edges: [], groups: [] }));
+      localStorage.setItem("mermade-diagram", JSON.stringify({ name: "Old plan", direction: "LR", source, nodes: [{ id: "Alice", label: "Stale node", x: 0, y: 0, width: 100, height: 60, shape: "rectangle", color: "#ffffff", textColor: "#24232a" }], edges: [], groups: [] }));
     }, source);
     await isolated.goto(page.url());
     await isolated.getByRole("heading", { name: "Unsupported chart" }).waitFor();
     assert.equal(await isolated.getByRole("button", { name: "Add node (N)" }).isDisabled(), true);
     assert.equal(await isolated.getByRole("button", { name: "FreeForm" }).isDisabled(), true);
     await isolated.keyboard.press("1");
+    await isolated.keyboard.press("e");
+    await isolated.keyboard.press("Delete");
+    assert.equal(await isolated.locator(".mermaid-inline-editor").count(), 0);
     assert.equal(await isolated.locator(".diagram-board").count(), 0);
     assert.equal(await isolated.locator(".mermaid-render svg").count(), 0);
     await isolated.getByRole("button", { name: "Source", exact: true }).click();
@@ -806,6 +809,30 @@ test("older non-flowchart documents remain recoverable without being rendered or
   } finally {
     await context.close();
   }
+});
+
+test("adding a node preserves an existing node in unprojected inline source", { timeout: 60_000 }, async () => {
+  const context = await browser.newContext();
+  const isolated = await context.newPage();
+  const original = "flowchart LR; node1[Keep original]";
+  try {
+    await isolated.addInitScript(() => localStorage.setItem("mermade-onboarding-v1", "complete"));
+    await isolated.goto(page.url());
+    await isolated.getByRole("button", { name: "Source", exact: true }).click();
+    await isolated.getByRole("textbox", { name: "Mermaid source" }).fill(original);
+    await isolated.getByRole("button", { name: "Apply to canvas" }).click();
+    await isolated.waitForFunction(() => document.querySelector(".source-panel .primary-button")?.hasAttribute("disabled"));
+    await isolated.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+    await isolated.getByRole("button", { name: "Add node (N)" }).click();
+    await isolated.keyboard.press("Escape");
+    await isolated.waitForFunction(() => document.querySelectorAll(".mermaid-render .node").length === 2);
+    assert.ok((await isolated.locator(".mermaid-render .node").allTextContents()).some((text) => text.includes("Keep original")));
+    await isolated.getByRole("button", { name: "Source", exact: true }).click();
+    const source = await isolated.getByRole("textbox", { name: "Mermaid source" }).inputValue();
+    assert.ok(source.startsWith(original));
+    assert.match(source, /node2\["New step"\]/);
+    assert.doesNotMatch(source, /node1\["New step"\]/);
+  } finally { await context.close(); }
 });
 
 test("a selected node can move into and out of an existing subgraph", { timeout: 60_000 }, async () => {
@@ -1396,5 +1423,5 @@ test("advanced flowcharts retain the spatial canvas, direction controls, and too
   const updatedSource = await page.locator(".source-editor-wrap textarea").inputValue();
   assert.match(updatedSource, /^flowchart LR/m);
   assert.match(updatedSource, /click B "\/details" "Open details"/);
-  assert.match(updatedSource, /node4\["New step"\]/);
+  assert.match(updatedSource, /node\d+\["New step"\]/);
 });

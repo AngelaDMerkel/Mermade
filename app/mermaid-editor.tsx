@@ -58,7 +58,7 @@ import { commitValidatedSource } from "./editor/source-edit";
 import { useDocumentSession } from "./editor/use-document-session";
 import { accessiblePolishedTextColour, DEFAULT_POLISHED_STYLE, normalisePolishedStyle, polishedTextRoles, PolishedStyle, POLISHED_THEME_OPTIONS, POLISHED_THEME_PREVIEWS, PolishedCustomColours } from "./beautiful-mermaid-config";
 import { layoutFlowchart } from "./flowchart-layout";
-import { appendFlowchartStatements, appendFlowchartSubgraph, flowchartNodeIds, flowchartRelationships, moveFlowchartNodeToSubgraph, removeFlowchartItems, updateFlowchartDirection, updateFlowchartEdgeStatement, updateFlowchartNodeStatement, updateFlowchartSubgraphStatement } from "./flowchart-source";
+import { appendFlowchartStatements, appendFlowchartSubgraph, uniqueFlowchartId, flowchartNodeIds, flowchartRelationships, moveFlowchartNodeToSubgraph, removeFlowchartItems, updateFlowchartDirection, updateFlowchartEdgeStatement, updateFlowchartNodeStatement, updateFlowchartSubgraphStatement } from "./flowchart-source";
 import { layoutCompatibilityError } from "./layout-compatibility";
 import {
   createLocalDiagramId,
@@ -1296,10 +1296,7 @@ export function MermaidEditor() {
       return;
     }
 
-    const idBase = "node";
-    let count = diagram.nodes.length + 1;
-    while (diagram.nodes.some((node) => node.id === `${idBase}${count}`)) count += 1;
-    const id = `${idBase}${count}`;
+    const id = uniqueFlowchartId(source, "node");
     const node: DiagramNode = {
       id,
       label: "New step",
@@ -1432,7 +1429,7 @@ export function MermaidEditor() {
       notify("Select two or more nodes to create a subgraph");
       return;
     }
-    const id = `group${diagram.groups.length + 1}`;
+    const id = uniqueFlowchartId(source, "group");
     commit((current) => ({
       ...current,
       groups: [...current.groups, { id, label: "New subgraph" }],
@@ -1660,15 +1657,15 @@ export function MermaidEditor() {
         return;
       }
 
-      if (key === "e") {
+      if (!nativeFlowchart && ["e", "n", "v", "l", "s", "d", "m", "o", "delete", "backspace"].includes(key)) {
         event.preventDefault();
-        editSelectedText();
+        notify(FLOWCHART_ONLY_MESSAGE);
         return;
       }
 
-      if (!nativeFlowchart && ["n", "v", "l", "s", "d", "m"].includes(key)) {
+      if (key === "e") {
         event.preventDefault();
-        notify(FLOWCHART_ONLY_MESSAGE);
+        editSelectedText();
         return;
       }
 

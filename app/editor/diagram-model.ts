@@ -275,6 +275,7 @@ export function restoreStoredDiagram(value: unknown): Diagram | null {
     : null;
   return {
     ...(restoredFlowchart ? { ...restoredFlowchart, source: diagram.source } : diagram),
+    ...(diagram.source && !isFlowchartSource(diagram.source) ? { nodes: [], edges: [], groups: [] } : {}),
     name: typeof diagram.name === "string" && diagram.name.trim() ? diagram.name : "Untitled diagram",
     style: { ...DEFAULT_DIAGRAM_STYLE, ...(diagram.style || {}) },
     polishedStyle: normalisePolishedStyle(diagram.polishedStyle),

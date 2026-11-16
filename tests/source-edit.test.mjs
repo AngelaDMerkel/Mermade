@@ -96,7 +96,6 @@ test("projection keeps stored positions for unchanged source and safe empty labe
   assert.match(nodeSyntax({ ...projected.nodes[0], label: "" }), /" "/);
 });
 
-
 test("non-flowchart source is rejected before validation without changing the document or history", async () => {
   const original = createBlankDiagram("Keep me");
   const session = new DocumentSession(original);
@@ -110,10 +109,18 @@ test("non-flowchart source is rejected before validation without changing the do
   }
 });
 
-
 test("restoration leaves unsupported source untouched even when its body resembles a flowchart", async () => {
   const { restoreStoredDiagram, normaliseStoredDiagram } = await loadTypeScript(new URL("../app/editor/diagram-model.ts", import.meta.url));
   const source = 'sequenceDiagram\n  %% retained text\n  flowchart LR\n  A[""] --> B';
   const stored = { ...createBlankDiagram("Archived"), source };
   assert.equal(normaliseStoredDiagram(restoreStoredDiagram(stored)).source, source);
+});
+
+test("unsupported saved documents discard stale visual projections without changing source", async () => {
+  const { restoreStoredDiagram, initialDiagram } = await loadTypeScript(new URL("../app/editor/diagram-model.ts", import.meta.url));
+  const source = "sequenceDiagram\n Alice->>Bob: Preserve";
+  const restored = restoreStoredDiagram({ ...initialDiagram, source });
+  assert.equal(restored.source, source);
+  assert.deepEqual([restored.nodes, restored.edges, restored.groups], [[], [], []]);
+  assert.equal(restored.name, initialDiagram.name);
 });

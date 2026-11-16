@@ -230,7 +230,7 @@ test("switches directly between canvas views with unmodified number keys", async
   assert.match(editor, />FreeForm canvas<\/b><kbd>1<\/kbd>/);
   assert.match(editor, />Mermaid canvas<\/b><kbd>2<\/kbd>/);
   assert.match(editor, /\{polishedSupported && <div><b>Beautiful workspace<\/b><kbd>3<\/kbd><\/div>}\s*/);
-  assert.match(editor, /targetView === "polished" && !polishedSupported[\s\S]{0,160}is not yet supported by Beautiful Mermaid/);
+  assert.match(editor, /targetView !== "mermaid" && !nativeFlowchart/);
 });
 
 test("loads Beautiful Mermaid as a distinct presentation workspace without replacing canonical source", async () => {

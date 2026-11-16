@@ -631,3 +631,13 @@ export function appendFlowchartSubgraph(source: string, id: string, label: strin
   const safeLabel = label.replaceAll('"', "'");
   return `${source.trimEnd()}\n  subgraph ${id}["${safeLabel}"]\n${nodeIds.map((nodeId) => `    ${nodeId}`).join("\n")}\n  end`;
 }
+
+/** Reserve identifiers even in valid syntax the visual projection cannot parse. */
+export function uniqueFlowchartId(source: string, prefix: "node" | "group") {
+  // Including label/comment tokens is deliberately conservative: skipping a
+  // number is harmless, while redefining an unprojected node changes its data.
+  const reserved = new Set(source.match(/[A-Za-z_][\w-]*/g) || []);
+  let suffix = 1;
+  while (reserved.has(`${prefix}${suffix}`)) suffix++;
+  return `${prefix}${suffix}`;
+}

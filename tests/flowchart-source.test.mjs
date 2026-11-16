@@ -484,3 +484,10 @@ test("removes an empty subgraph frame when its final orphan is deleted", async (
   assert.match(updated, /%% this explanation remains useful/);
   assert.match(updated, /keep\[Keep\]/);
 });
+
+test("new identifiers cannot redefine inline, unprojected or grouped source nodes", async () => {
+  const { uniqueFlowchartId } = await loadFlowchartSourceHelpers();
+  assert.equal(uniqueFlowchartId("flowchart LR; node1[Keep original]", "node"), "node2");
+  assert.equal(uniqueFlowchartId("flowchart LR\n node1 & node2 --> group1\n subgraph group2[Team]\n node3\n end", "group"), "group3");
+  assert.equal(uniqueFlowchartId("flowchart TB", "node"), "node1");
+});
