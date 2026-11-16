@@ -57,51 +57,19 @@ nested `AGENTS.md` before changing files.
 
 ## Review process
 
-Use the `code-review-and-quality` skill for correctness, readability,
-architecture, security, and performance review before integration. The workflow
-below follows the two-chat review pattern in Artilities' repository-local
-`review` skill.
+Use the [repository-local `review` skill](.agents/skills/review/SKILL.md), adapted
+from Artilities, when the user invokes `@review`, `$review`, or the review-and-fix
+loop. The invocation requests a PR, a separate reviewer chat with its own branch
+and worktree, and up to three rounds of independent review and fixes. Use
+`code-review-and-quality` for correctness, readability, architecture, security,
+and performance criteria.
 
-- An explicit `@review`, `$review`, or request for the review-and-fix loop
-  authorizes pushing the validated branch, opening or reusing its PR, creating
-  a separate reviewer chat with its own branch and worktree, and up to three
-  review-and-fix rounds. Discussing the workflow does not start it. Plain
-  `@review` stops at merge readiness; `@review and merge` also authorizes merging
-  once all requirements pass.
-- Give the reviewer the PR URL, intended base repository and branch, full head
-  SHA, round number, implementation chat ID, acceptance criteria, and relevant
-  verification limits. Reuse the same PR and reviewer chat across rounds.
-- The reviewer independently tests the exact revision and owns the verdict.
-  Start with the complete diff and highest-risk behavior. In later rounds,
-  retest prior findings and inspect fixes, adjacent callers, and interactions.
-  Keep the implementation checkout untouched.
-- Each finding must include severity, file and line at the reviewed SHA,
-  triggering scenario, expected and observed behavior, and supporting evidence.
-  Distinguish existing defects from regressions, required fixes from optional
-  suggestions, and report verification limits. A clean review is a valid result.
-- Record each round's verdict, reviewed SHA, checks, and findings on the PR.
-  Use an eligible independent reviewer identity configured for this repository
-  when publishing approvals, and read back the published review to verify its
-  author and revision. Artilities' bot and publishing setup are repository
-  specific; do not assume they are configured for Mermade.
-- The implementer addresses valid findings in the original worktree, verifies,
-  commits, and pushes fixes. Respond to every finding on the PR with the fix
-  commit and evidence, a supported dispute, or the remaining blocker. Any head
-  change, including a CI fix, needs review of the new revision.
-- Read the latest user directions in both chats before GitHub writes, review
-  dispatches, and the final readiness or merge decision. Honor a pause or scope
-  change. After three rounds, leave unresolved work open and report the current
-  and last reviewed SHAs; further rounds require a new request.
-- Before reporting readiness or merging, verify the intended base, unchanged
-  reviewed head, clean verdict, resolved required findings, mergeability, and
-  passing required checks and approvals for that revision. Never bypass branch
-  protections. For an authorized merge, preserve the reviewed commits with
-  `gh pr merge <PR> --merge --match-head-commit <reviewed-sha>`; do not squash.
-  Report a conflicting repository merge policy rather than changing methods.
-- Archive the reviewer chat after a successful completed review, keeping it
-  available while findings remain. Reopen and reuse it for further authorized
-  rounds. Keep the implementation chat open and verify any merge before
-  reporting success.
+Plain `@review` stops at merge readiness. `@review and merge` also authorizes
+merging the reviewed revision after all requirements pass. The reviewer owns
+its verdict and publishes through `muttis-minder[bot]`; the user's account owns
+the PR, pushes, implementation replies, and merge. Follow the skill's publisher
+preflight to verify the App has access to Mermade. Preserve the reviewed commits;
+never squash merge. Discussing the workflow does not start it.
 
 Hand off the result, worktree, branch, commit, checks, and outstanding limits.
 Distinguish local commits from reviewed integration and deployment.
