@@ -1183,6 +1183,9 @@ test("Beautiful visually previews Unicode and ASCII", { timeout: 60_000 }, async
     assert.ok(await unicodePreview.locator("pre code span").count() > 0, "the browser preview must use Beautiful Mermaid's themed character roles");
     assert.equal(await page.locator(".zoom-controls > button").filter({ hasText: "100%" }).count(), 1, "text diagrams must open at a readable one-to-one scale");
 
+    await page.getByRole("tab", { name: "Unicode", exact: true }).click();
+    assert.equal(await unicodePreview.locator("pre").isVisible(), true, "clicking the active preview must not clear its completed result");
+
     await page.getByRole("tab", { name: "ASCII", exact: true }).click();
     const asciiPreview = page.getByRole("tabpanel", { name: "ASCII text preview" });
     await asciiPreview.locator("pre").waitFor({ state: "visible" });

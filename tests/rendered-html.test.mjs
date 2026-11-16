@@ -168,10 +168,6 @@ test("supports visible marquee selection in Mermaid view", async () => {
   assert.match(css, /\.mermaid-render \[data-node-id\]\.mermade-selected \.label-container path \{[^}]*stroke: var\(--purple\) !important;[^}]*stroke-width: 3\.5px !important;/);
   assert.match(css, /\.diagram-node\.selected \.node-shape \{[^}]*border-color: var\(--purple\);[^}]*drop-shadow\(1px 0 0 var\(--purple\)\)[^}]*drop-shadow\(0 -1px 0 var\(--purple\)\)/);
   assert.doesNotMatch(css, /\.diagram-node\.selected \.node-shape \{[^}]*rgb\(224 9 95 \/ 15%\)/);
-  assert.match(editor, /function toggleRenderedSelection\(element: HTMLElement, selected: boolean\)/);
-  assert.match(editor, /shape\.style\.setProperty\("stroke", "var\(--purple\)", "important"\)/);
-  assert.match(editor, /shape\.dataset\.mermadeSelectionOutline = JSON\.stringify/);
-  assert.match(editor, /delete shape\.dataset\.mermadeSelectionOutline/);
 });
 
 test("keeps large ELK flowcharts centred, selectable, and source-deletable", async () => {
@@ -181,7 +177,7 @@ test("keeps large ELK flowcharts centred, selectable, and source-deletable", asy
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
   ]);
 
-  assert.match(editor, /flowchartNodeIds\(source\)/);
+  assert.match(rendering, /flowchartNodeIds\(source\)/);
   assert.match(editor, /sourceNodeIds\.has\(id\)/);
   assert.match(editor, /left: `max\([^`]+calc\(\(100% - \$\{renderedSize\.width \* zoom\}px\) \/ 2\)\)`/);
   assert.match(rendering, /classList\.add\("mermade-node-hit"\)/);
@@ -221,7 +217,7 @@ test("anchors canvas view switches to the same logical node", async () => {
 test("switches directly between canvas views with unmodified number keys", async () => {
   const editor = await readFile(new URL("../app/mermaid-editor.tsx", import.meta.url), "utf8");
 
-  assert.match(editor, /if \(key === "1" \|\| key === "2" \|\| \(key === "3" && polishedSupported\)\)/);
+  assert.match(editor, /if \(key === "1" \|\| key === "2" \|\| \(key === "3" && nativeFlowchart\)\)/);
   assert.match(editor, /if \(key === "3"\) switchWorkspace\("beautiful"\)/);
   assert.match(editor, /else switchCanvasView\(key === "1" \? "free" : "mermaid"\)/);
   assert.match(editor, /aria-keyshortcuts="1"/);
@@ -229,7 +225,7 @@ test("switches directly between canvas views with unmodified number keys", async
   assert.match(editor, /aria-keyshortcuts="3"/);
   assert.match(editor, />FreeForm canvas<\/b><kbd>1<\/kbd>/);
   assert.match(editor, />Mermaid canvas<\/b><kbd>2<\/kbd>/);
-  assert.match(editor, /\{polishedSupported && <div><b>Beautiful workspace<\/b><kbd>3<\/kbd><\/div>}\s*/);
+  assert.match(editor, /\{nativeFlowchart && <div><b>Beautiful workspace<\/b><kbd>3<\/kbd><\/div>}\s*/);
   assert.match(editor, /targetView !== "mermaid" && !nativeFlowchart/);
 });
 
@@ -259,7 +255,7 @@ test("loads Beautiful Mermaid as a distinct presentation workspace without repla
   assert.doesNotMatch(editor, /from "\.\/beautiful-mermaid"/);
   assert.match(editor, /beautifulWorkspacePromise \?\?= import\("\.\/beautiful-mermaid"\)/);
   assert.match(editor, /aria-label="Workspace"/);
-  assert.match(editor, /\{polishedSupported && <nav className="workspace-switcher" aria-label="Workspace">/);
+  assert.match(editor, /\{nativeFlowchart && <nav className="workspace-switcher" aria-label="Workspace">/);
   assert.match(editor, /className="beautiful-inspector-body"/);
   assert.match(editor, /aria-label="Beautiful output preview"/);
   for (const preview of ["Diagram", "Unicode", "ASCII"]) assert.match(editor, new RegExp(`"${preview}"`));

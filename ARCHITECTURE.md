@@ -26,6 +26,7 @@ source that the projection cannot represent.
 - `mermaid-runtime.ts`: lazy engine/layout imports, strict configuration, serialised validation/rendering and temporary DOM cleanup.
 - `browser-storage.ts`: safe acquisition of browser storage. The existing `local-diagram-library.ts` owns the on-disk keys and library format.
 - `mermaid-source.ts`: flowchart scope and frontmatter splitting shared by projection, style and export.
+- `mermaid-rendering.ts`: SVG hit targets, source label resolution, model identity binding and selection outlines. Source lines are normalised once per render, with repeated labels resolved in source order.
 - `mermaid-editor.tsx`: UI, canvas gestures, selection, local library orchestration and renderer presentation.
 
 ## Adding or changing editing features

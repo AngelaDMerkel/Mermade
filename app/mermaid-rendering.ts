@@ -1,3 +1,8 @@
+import type { Diagram } from "./editor/diagram-types";
+import { projectSourceBackedFlowchart } from "./editor/diagram-model";
+import { flowchartNodeIds } from "./flowchart-source";
+import { bindRenderedFlowchartEdges } from "./rendered-edge-identity";
+
 export function normalizeRenderedSvg(svg: SVGSVGElement) {
   svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
 
@@ -58,40 +63,30 @@ function comparableText(value: string) {
     .toLocaleLowerCase();
 }
 
-/**
- * Find the Mermaid source statement most likely represented by a rendered
- * label when the tolerant flowchart projection cannot represent the element.
- */
-export function sourceLineForRenderedText(source: string, renderedText: string) {
-  const label = comparableText(renderedText);
-  if (label.length < 2) return -1;
-
+/** Resolve repeated labels in source order, normalising source only once per SVG. */
+export function createRenderedLabelResolver(source: string) {
   const candidates = source.split(/\r?\n/)
-    .map((line, index) => ({ line: comparableText(line), index, rawLength: line.length }))
+    .map((line, index) => ({ line: comparableText(line), index }))
     .filter(({ line }) => line && !line.startsWith("%%") && !line.startsWith("---"));
-  const matches = candidates.filter(({ line }) => line.includes(label));
-  if (!matches.length) return -1;
-  matches.sort((first, second) => first.rawLength - second.rawLength || first.index - second.index);
-  return matches[0].index;
+  const labels = new Map<string, { lines: number[]; occurrence: number }>();
+  return (renderedText: string) => {
+    const label = comparableText(renderedText);
+    if (label.length < 2) return -1;
+    let match = labels.get(label);
+    if (!match) {
+      match = { lines: candidates.filter(({ line }) => line.includes(label)).map(({ index }) => index), occurrence: 0 };
+      labels.set(label, match);
+    }
+    return match.lines[match.occurrence++] ?? match.lines[0] ?? -1;
+  };
 }
 
 /** Attach source-line metadata to rendered labels and their nearest SVG group. */
 export function decorateRenderedStatements(svg: SVGSVGElement, source: string) {
   const decorated = new Set<Element>();
-  const renderedTextOccurrences = new Map<string, number>();
-  const sourceLines = source.split(/\r?\n/);
+  const resolveLabel = createRenderedLabelResolver(source);
   svg.querySelectorAll<SVGGraphicsElement>("text, foreignObject").forEach((label) => {
-    const renderedLabel = comparableText(label.textContent || "");
-    let line: number;
-    {
-      const occurrence = renderedTextOccurrences.get(renderedLabel) ?? 0;
-      const matchingLines = renderedLabel.length < 2 ? [] : sourceLines
-        .map((candidate, index) => ({ candidate: comparableText(candidate), index }))
-        .filter(({ candidate }) => candidate && !candidate.startsWith("%%") && !candidate.startsWith("---") && candidate.includes(renderedLabel))
-        .map(({ index }) => index);
-      line = matchingLines[occurrence] ?? matchingLines[0] ?? sourceLineForRenderedText(source, label.textContent || "");
-      renderedTextOccurrences.set(renderedLabel, occurrence + 1);
-    }
+    const line = resolveLabel(label.textContent || "");
     if (line < 0) return;
     const target = label.closest("g") || label;
     if (!(target instanceof SVGElement)) return;
@@ -110,4 +105,120 @@ export function normalizeSvgMarkup(markup: string) {
   if (!svg) return markup;
   normalizeRenderedSvg(svg);
   return svg.outerHTML;
+}
+
+export function bindRenderedFlowchart(host: HTMLElement, diagram: Diagram, source: string, selectedIds: readonly string[]) {
+  const svg = host.querySelector("svg");
+  if (svg) {
+    normalizeRenderedSvg(svg);
+    decorateRenderedStatements(svg, source);
+  }
+  // Bind interaction identities from the exact Mermaid document that
+  // produced this SVG. The persisted visual projection may briefly be
+  // stale during restoration or Fast Refresh, but it must never make
+  // two source relationships share one selectable identity.
+  const renderedDiagram = projectSourceBackedFlowchart(diagram, source);
+  const nodeIds = [...new Set([
+    ...renderedDiagram.nodes.map((node) => node.id),
+    ...flowchartNodeIds(source),
+  ])].sort((a, b) => b.length - a.length);
+  host.querySelectorAll<HTMLElement>(".node").forEach((element) => {
+    const id = nodeIds.find((nodeId) => element.id === nodeId || element.id.includes(`-${nodeId}-`) || element.id.endsWith(`-${nodeId}`));
+    if (id) element.dataset.nodeId = id;
+  });
+  const groupIds = renderedDiagram.groups.map((group) => group.id).sort((a, b) => b.length - a.length);
+  host.querySelectorAll<HTMLElement>(".cluster").forEach((element) => {
+    const id = groupIds.find((groupId) => element.id === groupId || element.id.endsWith(`-${groupId}`));
+    if (id) element.dataset.groupId = id;
+  });
+  bindRenderedFlowchartEdges(host, renderedDiagram.edges);
+  syncRenderedSelection(host, selectedIds);
+}
+
+const SOURCE_LINE_SELECTION_PREFIX = "source-line:";
+
+export function sourceLineSelection(index: number) {
+  return `${SOURCE_LINE_SELECTION_PREFIX}${index}`;
+}
+
+export function sourceLineFromSelection(value: string | undefined) {
+  if (!value?.startsWith(SOURCE_LINE_SELECTION_PREFIX)) return -1;
+  const index = Number(value.slice(SOURCE_LINE_SELECTION_PREFIX.length));
+  return Number.isInteger(index) ? index : -1;
+}
+
+export function renderedSelectionId(element: HTMLElement) {
+  const modelId = element.dataset.nodeId || element.dataset.edgeId || element.dataset.groupId;
+  // Source-authoritative flowcharts can render valid Mermaid nodes that the
+  // tolerant FreeForm model does not understand. Keep their Mermaid identity
+  // so visual deletion can remove the node and every relationship referencing
+  // it, rather than selecting only the declaration line beneath the pointer.
+  if (modelId) return modelId;
+  const line = Number(element.dataset.sourceLine);
+  if (element.dataset.sourceLine !== undefined && Number.isInteger(line)) return sourceLineSelection(line);
+  return undefined;
+}
+
+function renderedModelElement(target: Element, diagram: Diagram) {
+  let element: Element | null = target;
+  while (element) {
+    const dataset = (element as HTMLElement).dataset;
+    if (
+      (dataset.nodeId && diagram.nodes.some((node) => node.id === dataset.nodeId))
+      || (dataset.edgeId && diagram.edges.some((edge) => edge.id === dataset.edgeId))
+      || (dataset.groupId && diagram.groups.some((group) => group.id === dataset.groupId))
+    ) return element as HTMLElement;
+    element = element.parentElement;
+  }
+  return null;
+}
+
+export function renderedInteractionElement(target: Element, diagram: Diagram) {
+  return renderedModelElement(target, diagram)
+    || target.closest<HTMLElement>("[data-node-id], [data-edge-id], [data-group-id]")
+    || target.closest<HTMLElement>("[data-source-line]");
+}
+
+function toggleRenderedSelection(element: HTMLElement, selected: boolean) {
+  element.classList.toggle("mermade-selected", selected);
+  if (!element.dataset.nodeId) return;
+  element.querySelectorAll<SVGElement>(
+    ":scope > rect:not(.mermade-node-hit), :scope > circle, :scope > ellipse, :scope > polygon, :scope > path, "
+    + ":scope > .label-container rect, :scope > .label-container circle, :scope > .label-container ellipse, "
+    + ":scope > .label-container polygon, :scope > .label-container path",
+  ).forEach((shape) => {
+    const storedOutline = shape.dataset.mermadeSelectionOutline;
+    if (selected) {
+      if (storedOutline === undefined) {
+        shape.dataset.mermadeSelectionOutline = JSON.stringify([
+          shape.style.getPropertyValue("stroke"),
+          shape.style.getPropertyPriority("stroke"),
+          shape.style.getPropertyValue("stroke-width"),
+          shape.style.getPropertyPriority("stroke-width"),
+        ]);
+      }
+      shape.style.setProperty("stroke", "var(--purple)", "important");
+      shape.style.setProperty("stroke-width", "3.5px", "important");
+      return;
+    }
+    if (storedOutline === undefined) return;
+    const [stroke, strokePriority, strokeWidth, strokeWidthPriority] = JSON.parse(storedOutline) as string[];
+    if (stroke) shape.style.setProperty("stroke", stroke, strokePriority); else shape.style.removeProperty("stroke");
+    if (strokeWidth) shape.style.setProperty("stroke-width", strokeWidth, strokeWidthPriority); else shape.style.removeProperty("stroke-width");
+    delete shape.dataset.mermadeSelectionOutline;
+  });
+}
+
+export function syncRenderedSelection(host: HTMLElement, selectedIds: readonly string[]) {
+  const selectedSet = new Set(selectedIds);
+  // Include Mermade-selected elements even if Mermaid replaced or changed
+  // their identity metadata. This prevents a formerly selected path from
+  // retaining a visual highlight after the authoritative selection changes.
+  const elements = host.querySelectorAll<HTMLElement>(
+    ".mermade-selected, [data-node-id], [data-edge-id], [data-group-id], [data-source-line]",
+  );
+  elements.forEach((element) => {
+    const id = renderedSelectionId(element);
+    toggleRenderedSelection(element, Boolean(id && selectedSet.has(id)));
+  });
 }
