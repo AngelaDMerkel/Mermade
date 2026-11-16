@@ -85,6 +85,11 @@ verdict or request changes.
 
 ## Publish the review and respond
 
+Public PR text must use repository-relative file paths and commit SHAs for
+locations. Do not publish actual workstation paths, local OS usernames, or
+other machine-specific personal details. Inspect the complete rendered draft
+before publishing; keep local checkout locations in private working notes.
+
 - **Publish.** The reviewer sends one review per round through the
   repository's GitHub App, `muttis-minder[bot]`. Set `commit_id` to the
   full head SHA. Include the round, verdict, checks performed, observed
