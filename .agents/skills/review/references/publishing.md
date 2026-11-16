@@ -3,11 +3,9 @@
 This skill uses Artilities' existing review publisher. It is an external tool
 dependency, not bundled Mermade application code. Use a trusted Artilities
 checkout containing `scripts/review/publish.mjs` and `scripts/review/github.mjs`,
-with Node.js 24.2 or later. On the current workstation the publisher is:
-
-```text
-/Users/duffy/Documents/GitHub/artilities/scripts/review/publish.mjs
-```
+with Node.js 24.2 or later. Locate that trusted checkout on the workstation and
+set `publisher` below to its actual path. Keep the resolved workstation path
+in private run configuration.
 
 The existing private settings file is
 `~/.config/artilities-reviewer/app.env`. It supplies `ARTILITIES_REVIEW_APP_ID`
@@ -50,7 +48,7 @@ Preview offline, verify the App and PR using a read-only token, then publish
 after checking the latest user directions in both chats:
 
 ```sh
-publisher=/Users/duffy/Documents/GitHub/artilities/scripts/review/publish.mjs
+publisher=/absolute/path/to/trusted/artilities/scripts/review/publish.mjs
 draft=/absolute/path/to/review.json
 settings="$HOME/.config/artilities-reviewer/app.env"
 node "$publisher" --dry-run "$draft"
@@ -58,7 +56,7 @@ node --env-file="$settings" "$publisher" --check "$draft"
 node --env-file="$settings" "$publisher" --publish "$draft"
 ```
 
-Set `publisher` to the trusted checkout's actual path on another workstation.
+Replace the example paths with private local paths when running these commands.
 Before publishing, `--check` must report `muttis-minder[bot]` on the intended
 repository, PR, base, and head. Publication verifies the review author, commit,
 verdict, and content before returning its URL. Read the review back on GitHub.
