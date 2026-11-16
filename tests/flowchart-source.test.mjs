@@ -417,6 +417,10 @@ test("new identifiers cannot redefine inline, unprojected or grouped source node
   const { uniqueFlowchartId } = await loadFlowchartSourceHelpers();
   assert.equal(uniqueFlowchartId("flowchart LR; node1[Keep original]", "node"), "node2");
   assert.equal(uniqueFlowchartId("flowchart LR\n node1 & node2 --> group1\n subgraph group2[Team]\n node3\n end", "group"), "group3");
+  for (const connector of ["-->", "---", "-.->", "-.-", "==>", "===", "--o", "--x", "<-->"]) {
+    assert.equal(uniqueFlowchartId(`flowchart LR; node1${connector}B`, "node"), "node2", connector);
+  }
+  assert.equal(uniqueFlowchartId("flowchart LR; group1-->node1", "group"), "group2");
   assert.equal(uniqueFlowchartId("flowchart TB", "node"), "node1");
 });
 

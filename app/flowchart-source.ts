@@ -572,7 +572,9 @@ export function appendFlowchartSubgraph(source: string, id: string, label: strin
 export function uniqueFlowchartId(source: string, prefix: "node" | "group") {
   // Including label/comment tokens is deliberately conservative: skipping a
   // number is harmless, while redefining an unprojected node changes its data.
-  const reserved = new Set(source.match(/[A-Za-z_][\w-]*/g) || []);
+  // Generated IDs never contain hyphens. Split there too so compact Mermaid
+  // connectors (node1-->B, node1---B, node1-.->B) cannot hide a reserved ID.
+  const reserved = new Set(source.match(/[A-Za-z_]\w*/g) || []);
   let suffix = 1;
   while (reserved.has(`${prefix}${suffix}`)) suffix++;
   return `${prefix}${suffix}`;

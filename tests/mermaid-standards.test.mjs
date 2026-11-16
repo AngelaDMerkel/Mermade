@@ -811,28 +811,34 @@ test("older non-flowchart documents remain recoverable without being rendered or
   }
 });
 
-test("adding a node preserves an existing node in unprojected inline source", { timeout: 60_000 }, async () => {
-  const context = await browser.newContext();
-  const isolated = await context.newPage();
-  const original = "flowchart LR; node1[Keep original]";
-  try {
-    await isolated.addInitScript(() => localStorage.setItem("mermade-onboarding-v1", "complete"));
-    await isolated.goto(page.url());
-    await isolated.getByRole("button", { name: "Source", exact: true }).click();
-    await isolated.getByRole("textbox", { name: "Mermaid source" }).fill(original);
-    await isolated.getByRole("button", { name: "Apply to canvas" }).click();
-    await isolated.waitForFunction(() => document.querySelector(".source-panel .primary-button")?.hasAttribute("disabled"));
-    await isolated.locator(".source-panel").getByRole("button", { name: "Done" }).click();
-    await isolated.getByRole("button", { name: "Add node (N)" }).click();
-    await isolated.keyboard.press("Escape");
-    await isolated.waitForFunction(() => document.querySelectorAll(".mermaid-render .node").length === 2);
-    assert.ok((await isolated.locator(".mermaid-render .node").allTextContents()).some((text) => text.includes("Keep original")));
-    await isolated.getByRole("button", { name: "Source", exact: true }).click();
-    const source = await isolated.getByRole("textbox", { name: "Mermaid source" }).inputValue();
-    assert.ok(source.startsWith(original));
-    assert.match(source, /node2\["New step"\]/);
-    assert.doesNotMatch(source, /node1\["New step"\]/);
-  } finally { await context.close(); }
+test("adding a node preserves existing identities in unprojected inline source", { timeout: 60_000 }, async (t) => {
+  for (const [original, label, count] of [
+    ["flowchart LR; node1[Keep original]", "Keep original", 2],
+    ["flowchart LR; node1-->B", "node1", 3],
+  ]) {
+    await t.test(original, async () => {
+      const context = await browser.newContext();
+      const isolated = await context.newPage();
+      try {
+        await isolated.addInitScript(() => localStorage.setItem("mermade-onboarding-v1", "complete"));
+        await isolated.goto(page.url());
+        await isolated.getByRole("button", { name: "Source", exact: true }).click();
+        await isolated.getByRole("textbox", { name: "Mermaid source" }).fill(original);
+        await isolated.getByRole("button", { name: "Apply to canvas" }).click();
+        await isolated.waitForFunction(() => document.querySelector(".source-panel .primary-button")?.hasAttribute("disabled"));
+        await isolated.locator(".source-panel").getByRole("button", { name: "Done" }).click();
+        await isolated.getByRole("button", { name: "Add node (N)" }).click();
+        await isolated.keyboard.press("Escape");
+        await isolated.waitForFunction((expected) => document.querySelectorAll(".mermaid-render .node").length === expected, count);
+        assert.ok((await isolated.locator(".mermaid-render .node").allTextContents()).some((text) => text.includes(label)));
+        await isolated.getByRole("button", { name: "Source", exact: true }).click();
+        const source = await isolated.getByRole("textbox", { name: "Mermaid source" }).inputValue();
+        assert.ok(source.startsWith(original));
+        assert.match(source, /node2\["New step"\]/);
+        assert.doesNotMatch(source, /node1\["New step"\]/);
+      } finally { await context.close(); }
+    });
+  }
 });
 
 test("a selected node can move into and out of an existing subgraph", { timeout: 60_000 }, async () => {
