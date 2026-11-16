@@ -4,18 +4,22 @@ These instructions apply to every Codex chat working in this repository. Read
 [README.md](README.md), [ARCHITECTURE.md](ARCHITECTURE.md), and any applicable
 nested `AGENTS.md` before changing files.
 
-## One branch and worktree per chat
+## Branches and worktrees
 
-- Every new Codex chat must have its own newly created Git branch and worktree
-  before beginning repository work, including review work. If Codex already
-  created a dedicated pair for that chat, use it rather than creating a second
-  pair. This is standing authorization; do not ask again for routine creation.
+- Every new Codex editing chat must have its own newly created Git branch and
+  worktree before beginning repository work. If Codex already created a dedicated
+  pair for that chat, use it rather than creating a second pair. This is standing
+  authorization; do not ask again for routine creation.
 - Check `git status --short`, `git branch --show-current`, `git branch --all`,
-  and `git worktree list` first. Confirm the intended base and use a descriptive,
-  unique `codex/<topic>` branch name. Keep the shared primary checkout on `main`.
-- Reuse the chat's assigned branch and worktree for follow-up work, testing, and
-  review fixes. A new chat gets a new pair; a new message in the same chat does
-  not. Bring needed base-branch changes into the assigned branch.
+  and `git worktree list` first. Confirm the intended base. For editing chats,
+  use a descriptive, unique `codex/<topic>` branch name. Keep the shared primary
+  checkout on `main`.
+- Reuse the editing chat's assigned branch and worktree for follow-up work,
+  testing, and review fixes. A new editing chat gets a new pair; a new message
+  in the same chat does not. Bring needed base-branch changes into that branch.
+- Reviewer chats use an isolated worktree with detached HEAD at the exact
+  revision being reviewed. Do not create a branch for a review. Implementation
+  fixes belong in the original editing chat's branch and worktree.
 - Never switch another chat's checkout, share its Git index, silently stash or
   discard its changes, or reuse an occupied worktree. Coordinate overlapping
   changes and preserve unrelated work. Worktrees do not isolate ports, browser
@@ -59,8 +63,8 @@ nested `AGENTS.md` before changing files.
 
 Use the [repository-local `review` skill](.agents/skills/review/SKILL.md), adapted
 from Artilities, when the user invokes `@review`, `$review`, or the review-and-fix
-loop. The invocation requests a PR, a separate reviewer chat with its own branch
-and worktree, and up to three rounds of independent review and fixes. Use
+loop. The invocation requests a PR, a separate reviewer chat in a detached
+worktree, and up to three rounds of independent review and fixes. Use
 `code-review-and-quality` for correctness, readability, architecture, security,
 and performance criteria.
 

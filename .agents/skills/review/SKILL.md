@@ -5,8 +5,9 @@ description: Run the Mermade two-chat PR review when the user invokes @review or
 
 # Two-chat pull request review
 
-Adapted from Artilities' `review` skill. Follow Mermade's working agreements
-for branch names and the dedicated branch and worktree required for every chat.
+Adapted from Artilities' `review` skill. Follow Mermade's working agreements:
+editing chats use dedicated branches and worktrees; reviewer chats use isolated
+worktrees with detached HEAD at the reviewed revision, without a new branch.
 Use the `code-review-and-quality` skill for review criteria.
 
 Start this workflow on the user's request in the implementation chat. A
@@ -27,9 +28,10 @@ the next push, comment, or merge. Keep the PR open on a stop.
    Push the validated branch and reuse its open PR against the intended
    base, or create one.
 3. Use one short topic for both chat titles. Name the implementation chat
-   `AT - <topic>` and place it in the existing **Production** sidebar
+   `MM - <topic>` and place it in the existing **Production** sidebar
    section. Open one separate chat named `Review - <topic>` in the same
-   project and move it to **Review**. Look up the sections by name.
+   project and move it to **Review**. Give it a detached worktree at the review
+   head; do not create a reviewer branch. Look up the sections by name.
    Give the reviewer the PR URL, intended base repository and branch, full
    head SHA, round number and implementation chat ID. Include the user's
    acceptance criteria, relevant handoff or branch references, concrete
