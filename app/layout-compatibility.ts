@@ -11,14 +11,9 @@ const TIDY_TREE_SHAPE_MESSAGE = "Tidy Tree requires one connected hierarchy with
 
 export function layoutCompatibilityError(
   layout: MermaidLayout,
-  diagramTypeId: string,
   graph: LayoutCompatibilityGraph,
 ) {
   if (layout !== "tidy-tree") return "";
-  if (diagramTypeId === "mindmap") return "";
-  if (diagramTypeId !== "flowchart") {
-    return "Tidy Tree currently supports Mindmaps and tree-shaped Flowcharts; choose Dagre or ELK for this diagram";
-  }
   if (graph.groupCount > 0) {
     return "Tidy Tree cannot render Flowchart subgraphs; remove the subgraphs or choose Dagre or ELK";
   }

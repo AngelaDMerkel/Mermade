@@ -43,12 +43,12 @@ test("newer requests win even when older validation finishes last", async () => 
   const session = new DocumentSession(createBlankDiagram());
   const gate = deferred();
   const old = commitValidatedSource(session, "flowchart LR\n A --> B", () => gate.promise);
-  const source = "sequenceDiagram\n Alice->>Bob: Hi";
+  const source = "flowchart TB\n X --> Y";
   assert.equal((await commitValidatedSource(session, source, valid)).ok, true);
   gate.resolve("");
   assert.equal((await old).cancelled, true);
   assert.equal(session.getSnapshot().source, source);
-  assert.deepEqual(session.getSnapshot().nodes, []);
+  assert.deepEqual(session.getSnapshot().nodes.map((node) => node.id), ["X", "Y"]);
 });
 
 test("intervening edits and draft changes invalidate pending source commits", async () => {
@@ -94,4 +94,26 @@ test("projection keeps stored positions for unchanged source and safe empty labe
   const projected = parseMermaid(source, first);
   assert.equal(projected.nodes[0].x, 912);
   assert.match(nodeSyntax({ ...projected.nodes[0], label: "" }), /" "/);
+});
+
+
+test("non-flowchart source is rejected before validation without changing the document or history", async () => {
+  const original = createBlankDiagram("Keep me");
+  const session = new DocumentSession(original);
+  for (const source of ["sequenceDiagram\n A->>B: Hi", "pie\n \"A\": 1", "gantt\n title Plan", "unknown"]) {
+    const result = await commitValidatedSource(session, source, async () => { throw new Error("Validator must not run"); });
+    assert.equal(result.ok, false);
+    assert.match(result.error, /supports flowcharts only/);
+    assert.equal(session.getSnapshot(), original);
+    session.undo();
+    assert.equal(session.getSnapshot(), original);
+  }
+});
+
+
+test("restoration leaves unsupported source untouched even when its body resembles a flowchart", async () => {
+  const { restoreStoredDiagram, normaliseStoredDiagram } = await loadTypeScript(new URL("../app/editor/diagram-model.ts", import.meta.url));
+  const source = 'sequenceDiagram\n  %% retained text\n  flowchart LR\n  A[""] --> B';
+  const stored = { ...createBlankDiagram("Archived"), source };
+  assert.equal(normaliseStoredDiagram(restoreStoredDiagram(stored)).source, source);
 });

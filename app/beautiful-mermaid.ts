@@ -1,3 +1,4 @@
+import { requireFlowchartSource } from "./mermaid-types";
 import { BeautifulTextRoles, polishedTextRoles, PolishedStyle, themeForPolishedRenderer } from "./beautiful-mermaid-config";
 
 export {
@@ -5,10 +6,8 @@ export {
   accessiblePolishedTextColour,
   normalisePolishedStyle,
   polishedTextRoles,
-  POLISHED_DIAGRAM_TYPE_IDS,
   POLISHED_THEME_OPTIONS,
   POLISHED_THEME_PREVIEWS,
-  supportsPolishedDiagram,
   themeForPolishedRenderer,
 } from "./beautiful-mermaid-config";
 export type { BeautifulThemeColours, PolishedCustomColours, PolishedPaletteMode, PolishedStyle, PolishedTheme } from "./beautiful-mermaid-config";
@@ -67,7 +66,7 @@ function supplyBeautifulFlowchartDirection(source: string) {
  * presentation. The source stored by Mermade is never rewritten.
  */
 function withoutFlowchartPresentationDirectives(source: string) {
-  if (!/^\s*(?:flowchart|graph|stateDiagram(?:-v2)?)\b/im.test(source)) return source;
+  if (!/^\s*(?:flowchart|graph)\b/im.test(source)) return source;
   return source
     .replace(/(^|[;\n])\s*(?:classDef|style|linkStyle)\b[^;\n]*/gim, "$1")
     .replace(/(^|[;\n])\s*class\s+[\w,-]+\s+[\w-]+\s*(?=;|\n|$)/gim, "$1")
@@ -80,6 +79,7 @@ function withoutFlowchartPresentationDirectives(source: string) {
  * canonical source stored by Mermade.
  */
 export function sourceForPolishedRenderer(source: string, respectSourceStyles = false) {
+  requireFlowchartSource(source);
   const withoutYaml = withoutFrontmatter(source).replace(/^(\s*)flowchart-elk\b/im, "$1flowchart");
   const adapted = supplyBeautifulFlowchartDirection(adaptExpandedFlowchartNodes(withoutYaml));
   return respectSourceStyles ? adapted : withoutFlowchartPresentationDirectives(adapted);
@@ -164,7 +164,6 @@ export async function renderPolishedSvg(source: string, style: PolishedStyle) {
     layerSpacing: style.layerSpacing,
     componentSpacing: style.componentSpacing,
     transparent: style.transparent,
-    interactive: style.interactive,
   }), textRoles);
 }
 

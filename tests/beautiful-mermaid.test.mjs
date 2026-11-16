@@ -1,32 +1,9 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
-import ts from "typescript";
+import { loadTypeScript } from "./helpers/load-typescript.mjs";
 import { renderMermaidASCII, renderMermaidSVG } from "beautiful-mermaid";
 
-async function loadAdapter() {
-  const [configSource, adapterSource] = await Promise.all([
-    readFile(new URL("../app/beautiful-mermaid-config.ts", import.meta.url), "utf8"),
-    readFile(new URL("../app/beautiful-mermaid.ts", import.meta.url), "utf8"),
-  ]);
-  const compilerOptions = { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 };
-  const configJavascript = ts.transpileModule(configSource, { compilerOptions }).outputText;
-  const configModule = `data:text/javascript;base64,${Buffer.from(configJavascript).toString("base64")}`;
-  const adapterJavascript = ts.transpileModule(adapterSource, {
-    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
-  }).outputText.replaceAll("./beautiful-mermaid-config", configModule);
-  return import(`data:text/javascript;base64,${Buffer.from(adapterJavascript).toString("base64")}`);
-}
-
-test("advertises only diagram types supported by Beautiful Mermaid", async () => {
-  const { supportsPolishedDiagram } = await loadAdapter();
-  for (const id of ["flowchart", "state", "sequence", "class", "er", "xychart"]) {
-    assert.equal(supportsPolishedDiagram(id), true, id);
-  }
-  for (const id of ["c4", "gantt", "mindmap", "pie", "sankey"]) {
-    assert.equal(supportsPolishedDiagram(id), false, id);
-  }
-});
+const loadAdapter = () => loadTypeScript(new URL("../app/beautiful-mermaid.ts", import.meta.url));
 
 test("uses Beautiful Mermaid's native derived palette contract by default", async () => {
   const { accessiblePolishedTextColour, DEFAULT_POLISHED_STYLE, normalisePolishedStyle, polishedTextRoles, readablePolishedTextColour, themeForPolishedRenderer } = await loadAdapter();
@@ -227,14 +204,9 @@ flowchart TD
   assert.doesNotMatch(svg, /fill="#ffffff" stroke="#77737f"/);
 });
 
-test("Beautiful Mermaid's specialist SVG renderers cover every supported Beautiful workspace diagram type", () => {
+test("Beautiful Mermaid's specialist SVG renderers cover flowchart shapes", () => {
   const samples = [
     ["flowchart", `flowchart LR\n A([Start]) --> B{Ready?}\n B --> C[(Store)]`, /class="node"/],
-    ["state", `stateDiagram-v2\n [*] --> Idle\n Idle --> Done: finish\n Done --> [*]`, /data-shape="state-start"/],
-    ["sequence", `sequenceDiagram\n Alice->>Bob: Hello\n Bob-->>Alice: Ready`, /class="actor"/],
-    ["class", `classDiagram\n Animal <|-- Duck\n Animal: +String name\n Duck: +swim\(\)`, /class="class-node"/],
-    ["er", `erDiagram\n CUSTOMER ||--o{ ORDER : places`, /class="entity"/],
-    ["xychart", `xychart-beta\n title "Growth"\n x-axis [Jan, Feb, Mar]\n bar [2, 5, 8]\n line [1, 4, 9]`, /xychart-bar-group/],
   ];
 
   for (const [id, source, distinctiveMarkup] of samples) {
@@ -245,7 +217,6 @@ test("Beautiful Mermaid's specialist SVG renderers cover every supported Beautif
       surface: "#fff4f8",
       border: "#d9c7cf",
       transparent: true,
-      interactive: true,
       componentSpacing: 36,
     });
     assert.match(svg, /viewBox=/, `${id} has a scalable canvas`);
@@ -254,14 +225,9 @@ test("Beautiful Mermaid's specialist SVG renderers cover every supported Beautif
   }
 });
 
-test("Beautiful Mermaid constructs spatial Unicode and ASCII canvases for every supported text diagram type", () => {
+test("Beautiful Mermaid constructs spatial Unicode and ASCII canvases for flowcharts", () => {
   const samples = [
     ["flowchart", `flowchart LR\n A([Start]) --> B{Ready?}\n B --> C[(Store)]`],
-    ["state", `stateDiagram-v2\n [*] --> Idle\n Idle --> Done: finish\n Done --> [*]`],
-    ["sequence", `sequenceDiagram\n Alice->>Bob: Hello\n Bob-->>Alice: Ready`],
-    ["class", `classDiagram\n Animal <|-- Duck\n Animal: +String name\n Duck: +swim\(\)`],
-    ["er", `erDiagram\n CUSTOMER ||--o{ ORDER : places`],
-    ["xychart", `xychart-beta\n title "Growth"\n x-axis [Jan, Feb, Mar]\n bar [2, 5, 8]\n line [1, 4, 9]`],
   ];
 
   for (const [id, source] of samples) {
@@ -271,5 +237,17 @@ test("Beautiful Mermaid constructs spatial Unicode and ASCII canvases for every 
     assert.ok(ascii.split("\n").length > 2, `${id} ASCII output has a two-dimensional canvas`);
     assert.match(unicode, /[┌┐└┘─│◇○█╭╮╰╯]/, `${id} uses Unicode drawing characters`);
     assert.doesNotMatch(ascii, /[┌┐└┘─│◇○█╭╮╰╯]/, `${id} ASCII output remains terminal-safe`);
+  }
+});
+
+
+test("Beautiful and text adapters reject unsupported source before rendering", async () => {
+  const { sourceForPolishedRenderer } = await loadAdapter();
+  const { renderTextDiagram } = await loadTypeScript(new URL("../app/unicode-export.ts", import.meta.url));
+  for (const source of ["sequenceDiagram\n A->>B: Hi", "pie\n \"A\": 1", "gantt\n title Plan"]) {
+    assert.throws(() => sourceForPolishedRenderer(source), /supports flowcharts only/);
+    const result = await renderTextDiagram(source, "unicode");
+    assert.equal(result.content, "");
+    assert.match(result.error, /supports flowcharts only/);
   }
 });

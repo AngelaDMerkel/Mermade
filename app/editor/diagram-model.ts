@@ -2,10 +2,9 @@ import { DEFAULT_POLISHED_STYLE, normalisePolishedStyle } from "../beautiful-mer
 import { layoutFlowchart } from "../flowchart-layout";
 import { parseFlowchartRelationshipLine, repairFlowchartEdgeEditArtifacts } from "../flowchart-source";
 import { visualShapeForMermaid } from "../flowchart-shapes";
-import { formatGanttSource, normaliseGanttTaskIds } from "../gantt-source";
 import { repairEmptyFlowchartNodeLabels } from "../mermaid-repair";
 import { DEFAULT_DIAGRAM_STYLE } from "../mermaid-style";
-import { detectDiagramType } from "../mermaid-types";
+import { isFlowchartSource } from "../mermaid-types";
 import type { Diagram, DiagramNode, DiagramEdge, DiagramGroup, NodeShape } from "./diagram-types";
 import { LATEST_MERMAID_VERSION } from "./mermaid-version";
 
@@ -16,7 +15,7 @@ export function hasDuplicateRelationshipIds(diagram: Diagram) {
 }
 
 export function projectSourceBackedFlowchart(diagram: Diagram, source = diagram.source) {
-  if (!source || !/^\s*(?:---[\s\S]*?---\s*)?(?:flowchart|graph)\b/im.test(source)) return diagram;
+  if (!source || !isFlowchartSource(source)) return diagram;
   const sourceBacked = { ...diagram, source };
   const projected = parseMermaid(source, sourceBacked);
   return projected ? { ...projected, source } : sourceBacked;
@@ -24,7 +23,7 @@ export function projectSourceBackedFlowchart(diagram: Diagram, source = diagram.
 
 export function normaliseStoredDiagram(diagram: Diagram) {
   let normalisedDiagram = diagram;
-  if (diagram.source && /^\s*(?:---[\s\S]*?---\s*)?(?:flowchart|graph)\b/im.test(diagram.source)) {
+  if (diagram.source && isFlowchartSource(diagram.source)) {
     const validLabels = repairEmptyFlowchartNodeLabels(diagram.source);
     const repaired = repairFlowchartEdgeEditArtifacts(validLabels);
     // Mermaid is authoritative for every source-backed flowchart. Persisted
@@ -34,9 +33,7 @@ export function normaliseStoredDiagram(diagram: Diagram) {
     // unrelated rendered paths to share one React selection identity.
     normalisedDiagram = projectSourceBackedFlowchart(diagram, repaired.source);
   }
-  if (!normalisedDiagram.source || !/^\s*gantt\b/im.test(normalisedDiagram.source)) return normalisedDiagram;
-  const normalised = formatGanttSource(normaliseGanttTaskIds(normalisedDiagram.source).source);
-  return normalised === normalisedDiagram.source ? normalisedDiagram : { ...normalisedDiagram, source: normalised };
+  return normalisedDiagram;
 }
 
 export const initialDiagram: Diagram = {
@@ -133,7 +130,7 @@ export function toMermaid(diagram: Diagram) {
 
 export function parseMermaid(source: string, previous: Diagram): Diagram | null {
   const lines = source.split("\n").map((line) => line.trim()).filter(Boolean);
-  const header = lines.find((line) => /^(flowchart|graph)(?:\s+(LR|RL|TB|TD|BT))?$/.test(line));
+  const header = lines.find((line) => /^(flowchart(?:-elk)?|graph)(?:\s+(LR|RL|TB|TD|BT))?$/.test(line));
   if (!header) return null;
 
   const sourceDirection = header.match(/\s(LR|RL|TB|TD|BT)$/)?.[1];
@@ -273,7 +270,7 @@ export function restoreStoredDiagram(value: unknown): Diagram | null {
   const restored = value as Partial<Diagram>;
   if (!Array.isArray(restored.nodes) || !Array.isArray(restored.edges) || !Array.isArray(restored.groups)) return null;
   const diagram = restored as Diagram;
-  const restoredFlowchart = diagram.source && detectDiagramType(diagram.source)?.id === "flowchart"
+  const restoredFlowchart = diagram.source && isFlowchartSource(diagram.source)
     ? parseMermaid(diagram.source, diagram)
     : null;
   return {

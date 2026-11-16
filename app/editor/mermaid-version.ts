@@ -1,4 +1,4 @@
-import { detectDiagramType } from "../mermaid-types";
+import { isFlowchartSource } from "../mermaid-types";
 import type { Diagram, SupportedMermaidVersion } from "./diagram-types";
 
 export const LATEST_MERMAID_VERSION: SupportedMermaidVersion = "11.16.0";
@@ -11,8 +11,7 @@ export function detectMermaidVersion(source: string) {
   if (/@\{\s*[^}]*\bshape\s*:/m.test(source)) {
     return { recommended: LATEST_MERMAID_VERSION, minimum: "11.3.0", label: "Mermaid 11.3+ expanded-shape syntax" };
   }
-  const detectedType = detectDiagramType(source);
-  return { recommended: LATEST_MERMAID_VERSION, minimum: "10.0.0", label: `${detectedType?.label || "Mermaid"} syntax` };
+  return { recommended: LATEST_MERMAID_VERSION, minimum: "10.0.0", label: `${isFlowchartSource(source) ? "Flowchart" : "Unsupported"} syntax` };
 }
 
 export function resolvedMermaidVersion(diagram: Diagram): SupportedMermaidVersion {

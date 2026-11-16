@@ -23,7 +23,7 @@ source that the projection cannot represent.
 - `document-session.ts`: immutable document transitions, bounded history and async edit tickets. No React or renderer dependency.
 - `use-document-session.ts`: React subscription and unmount invalidation.
 - `source-edit.ts`: candidate preparation, injected validation and conditional commit. The UI receives success, rejection or cancellation.
-- `mermaid-runtime.ts`: lazy engine/plugin imports, strict configuration, serialised validation/rendering and temporary DOM cleanup.
+- `mermaid-runtime.ts`: lazy engine/layout imports, strict configuration, serialised validation/rendering and temporary DOM cleanup.
 - `browser-storage.ts`: safe acquisition of browser storage. The existing `local-diagram-library.ts` owns the on-disk keys and library format.
 - `mermaid-editor.tsx`: UI, canvas gestures, selection, local library orchestration and renderer presentation.
 
@@ -70,3 +70,23 @@ syntax can render without appearing completely in the projected graph. Keep
 patching authoritative source and test unsupported syntax when extending visual
 editing. The renderer queue prevents configuration overlap but does not move SVG
 rendering off the main thread or cancel already-running Mermaid work.
+
+## Flowchart-only scope
+
+The editor accepts only `flowchart`, `graph`, and `flowchart-elk` declarations.
+`mermaid-types.ts` recognises these after frontmatter and comments; source
+transactions and both presentation adapters enforce the same policy before
+calling a renderer. Mermaid remains the syntax authority after that check.
+There is no diagram-family registry, type picker, Structured/Data workspace,
+Gantt model, ZenUML plugin, or Block renderer patch.
+
+Restoration preserves older non-flowchart source verbatim. The library keeps
+those documents available, while the UI disables visual tools and offers source
+viewing, copying and export. Source replacement still goes through the validated
+transaction. Tests cover rejected imports, unchanged history, and recovery from
+browser storage.
+
+The build retains a narrowly scoped ELK compatibility patch: ELK graph logging
+and cloning must omit DOM-backed fields to avoid React's circular metadata.
+The former Block and Gantt patches are removed. The real browser suite tests ELK
+inside React, since standalone Mermaid rendering does not expose this failure.

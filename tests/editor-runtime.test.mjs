@@ -36,3 +36,13 @@ test("a blocked localStorage getter is handled before library operations run", (
     else delete globalThis.window;
   }
 });
+
+
+test("unsupported charts never reach Mermaid rendering or parsing", async () => {
+  const { renderMermaidSvg, validateSource } = await loadTypeScript(new URL("../app/editor/mermaid-runtime.ts", import.meta.url));
+  const source = "sequenceDiagram\n A->>B: Hi";
+  for (const version of ["11.16.0", "10.9.6"]) {
+    assert.match(await validateSource(source, version), /supports flowcharts only/);
+    await assert.rejects(renderMermaidSvg({ source, version, id: "unsupported" }), /supports flowcharts only/);
+  }
+});

@@ -1,4 +1,3 @@
-export const POLISHED_DIAGRAM_TYPE_IDS = new Set(["flowchart", "state", "sequence", "class", "er", "xychart"]);
 
 export const POLISHED_THEME_OPTIONS = [
   ["mermade-auto", "Mermade — adapts to app"],
@@ -74,7 +73,6 @@ export type PolishedStyle = {
   componentSpacing: number;
   transparent: boolean;
   respectSourceStyles: boolean;
-  interactive: boolean;
 };
 
 export const DEFAULT_POLISHED_STYLE: PolishedStyle = {
@@ -97,7 +95,6 @@ export const DEFAULT_POLISHED_STYLE: PolishedStyle = {
   componentSpacing: 36,
   transparent: true,
   respectSourceStyles: false,
-  interactive: true,
 };
 
 const MERMADE_ADAPTIVE_THEME = {
@@ -218,8 +215,4 @@ export function normalisePolishedStyle(style?: StoredPolishedStyle): PolishedSty
 
 export function themeForPolishedRenderer(theme: PolishedTheme, themes: Record<string, BeautifulThemeColours>): BeautifulThemeColours {
   return theme === "mermade-auto" ? MERMADE_ADAPTIVE_THEME : (themes[theme] || MERMADE_ADAPTIVE_THEME);
-}
-
-export function supportsPolishedDiagram(diagramTypeId: string) {
-  return POLISHED_DIAGRAM_TYPE_IDS.has(diagramTypeId);
 }

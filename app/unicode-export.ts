@@ -1,3 +1,5 @@
+import { isFlowchartSource, FLOWCHART_ONLY_MESSAGE } from "./mermaid-types";
+
 export type UnicodeExportResult = {
   content: string;
   html?: string;
@@ -48,6 +50,7 @@ export function createUnicodeSourceOutline(source: string, reason = "The spatial
 }
 
 export function renderTextDiagram(source: string, format: TextDiagramFormat, timeoutMs = 20_000, theme?: TextDiagramTheme): Promise<UnicodeExportResult> {
+  if (!isFlowchartSource(source)) return Promise.resolve({ content: "", simplified: false, error: FLOWCHART_ONLY_MESSAGE });
   if (typeof Worker === "undefined") {
     return Promise.resolve({
       content: createUnicodeSourceOutline(source),
