@@ -1,4 +1,4 @@
-import { isFlowchartSource, FLOWCHART_ONLY_MESSAGE } from "./mermaid-types";
+import { isFlowchartSource, FLOWCHART_ONLY_MESSAGE, splitFrontmatter } from "./mermaid-source";
 
 export type UnicodeExportResult = {
   content: string;
@@ -23,10 +23,7 @@ type UnicodeWorkerMessage =
   | { ok: false; error: string };
 
 function semanticSourceLines(source: string) {
-  const withoutFrontmatter = source.trimStart().startsWith("---")
-    ? source.trimStart().replace(/^---\s*\r?\n[\s\S]*?\r?\n---\s*(?:\r?\n|$)/, "")
-    : source;
-  return withoutFrontmatter
+  return splitFrontmatter(source).body
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter((line) => line
@@ -91,8 +88,4 @@ export function renderTextDiagram(source: string, format: TextDiagramFormat, tim
     });
     worker.postMessage({ source, format, theme });
   });
-}
-
-export function renderUnicodeDiagram(source: string, timeoutMs = 20_000) {
-  return renderTextDiagram(source, "unicode", timeoutMs);
 }

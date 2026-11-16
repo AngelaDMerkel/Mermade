@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { loadTypeScript } from "./helpers/load-typescript.mjs";
 
-const { isFlowchartSource, requireFlowchartSource, FLOWCHART_TEMPLATE } = await loadTypeScript(new URL("../app/mermaid-types.ts", import.meta.url));
+const { isFlowchartSource, requireFlowchartSource, FLOWCHART_TEMPLATE } = await loadTypeScript(new URL("../app/mermaid-source.ts", import.meta.url));
 
 test("accepts flowchart, graph and flowchart-elk declarations after metadata", () => {
   assert.equal(isFlowchartSource(FLOWCHART_TEMPLATE), true);
@@ -21,4 +21,16 @@ test("rejects every removed chart declaration and does not detect flowchart text
     assert.equal(isFlowchartSource(source), false, declaration);
     assert.throws(() => requireFlowchartSource(source), /supports flowcharts only/);
   }
+});
+
+test("frontmatter splitting preserves metadata and the exact body, including CRLF", async () => {
+  const { splitFrontmatter } = await loadTypeScript(new URL("../app/mermaid-source.ts", import.meta.url));
+  const body = 'flowchart LR\r\n  A[Start] --> B[Finish]\r\n';
+  assert.deepEqual(splitFrontmatter(`\ufeff\r\n---\r\ntitle: Example\r\nconfig:\r\n  theme: base\r\n---\r\n${body}`), {
+    leading: "\ufeff\r\n", lines: ["title: Example", "config:", "  theme: base"], body,
+  });
+  assert.equal(splitFrontmatter(body).body, body);
+  const incomplete = '---\ntitle: unfinished\nflowchart LR';
+  assert.equal(splitFrontmatter(incomplete).body, incomplete);
+  assert.equal(isFlowchartSource(incomplete), false);
 });

@@ -5,7 +5,7 @@ import mermaidV10 from "mermaid-v10";
 import { FLOWCHART_SHAPES } from "../../app/flowchart-shapes";
 import { decorateRenderedStatements, normalizeRenderedSvg } from "../../app/mermaid-rendering";
 import { applyDiagramStyle, DEFAULT_DIAGRAM_STYLE } from "../../app/mermaid-style";
-import { FLOWCHART_TEMPLATE } from "../../app/mermaid-types";
+import { FLOWCHART_TEMPLATE } from "../../app/mermaid-source";
 
 type RenderMeasurement = {
   id: string;

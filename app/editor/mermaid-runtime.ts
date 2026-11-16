@@ -1,6 +1,6 @@
 import type { MermaidLayout } from "../mermaid-style";
 import { readDiagramStyle } from "../mermaid-style";
-import { requireFlowchartSource } from "../mermaid-types";
+import { requireFlowchartSource } from "../mermaid-source";
 import type { SupportedMermaidVersion } from "./diagram-types";
 import { createSerialTaskQueue } from "./serial-task-queue";
 

@@ -1,4 +1,4 @@
-import { isFlowchartSource } from "../mermaid-types";
+import { isFlowchartSource } from "../mermaid-source";
 import type { Diagram, SupportedMermaidVersion } from "./diagram-types";
 
 export const LATEST_MERMAID_VERSION: SupportedMermaidVersion = "11.16.0";

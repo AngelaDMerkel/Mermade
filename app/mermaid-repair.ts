@@ -1,4 +1,4 @@
-import { isFlowchartSource } from "./mermaid-types";
+import { isFlowchartSource } from "./mermaid-source";
 
 export type RepairVersion = "11.16.0" | "10.9.6";
 

@@ -50,7 +50,7 @@ import {
   useState,
 } from "react";
 import type { Diagram, DiagramNode, DiagramEdge, EdgeStyle, NodeShape, MermaidVersionPreference, SupportedMermaidVersion } from "./editor/diagram-types";
-import { clone, createBlankDiagram, edgeSyntax, hasDuplicateRelationshipIds, initialDiagram, nodeStyleSyntax, nodeSyntax, normaliseStoredDiagram, parseMermaid, projectSourceBackedFlowchart, restoreStoredDiagram, toMermaid } from "./editor/diagram-model";
+import { clone, createBlankDiagram, edgeSyntax, hasDuplicateRelationshipIds, initialDiagram, nodeStyleSyntax, nodeSyntax, parseMermaid, projectSourceBackedFlowchart, restoreStoredDiagram, toMermaid } from "./editor/diagram-model";
 import { detectMermaidVersion, resolvedMermaidVersion } from "./editor/mermaid-version";
 import { renderMermaidSvg, validateSource } from "./editor/mermaid-runtime";
 import { getBrowserStorage } from "./editor/browser-storage";
@@ -77,7 +77,7 @@ import { FLOWCHART_HELP } from "./mermaid-help";
 import { decorateRenderedStatements, normalizeRenderedSvg, normalizeSvgMarkup } from "./mermaid-rendering";
 import { createRepairProposals, RepairProposal, RepairVersion } from "./mermaid-repair";
 import { applyDiagramStyle, DEFAULT_DIAGRAM_STYLE, DiagramStyle, MermaidLayout, MermaidLook, MermaidTheme } from "./mermaid-style";
-import { isFlowchartSource, FLOWCHART_TEMPLATE, FLOWCHART_ONLY_MESSAGE } from "./mermaid-types";
+import { isFlowchartSource, FLOWCHART_TEMPLATE, FLOWCHART_ONLY_MESSAGE } from "./mermaid-source";
 import { renderTextDiagram, TextDiagramFormat } from "./unicode-export";
 import { bindRenderedFlowchartEdges } from "./rendered-edge-identity";
 
@@ -587,10 +587,9 @@ export function MermaidEditor() {
   }, [replaceLocalDiagramIndex]);
 
   const resetEditorForLocalDiagram = useCallback((next: Diagram) => {
-    const normalisedNext = normaliseStoredDiagram(next);
-    documentSession.reset(normalisedNext);
-    setSelected(normalisedNext.nodes[0] ? [normalisedNext.nodes[0].id] : []);
-    edgeCounter.current = Math.max(0, ...normalisedNext.edges.map((edge) => Number(edge.id.match(/^e(\d+)$/)?.[1]) || 0)) + 1;
+    documentSession.reset(next);
+    setSelected(next.nodes[0] ? [next.nodes[0].id] : []);
+    edgeCounter.current = Math.max(0, ...next.edges.map((edge) => Number(edge.id.match(/^e(\d+)$/)?.[1]) || 0)) + 1;
     setConnectionStart(null);
     setEditingNode(null);
     setEditingGroup(null);
@@ -612,7 +611,7 @@ export function MermaidEditor() {
     shouldFitMermaidRef.current = true;
     shouldFitPolishedRef.current = true;
     shouldFitFreeformRef.current = true;
-    const targetSource = normalisedNext.source ?? applyDiagramStyle(toMermaid(normalisedNext), normalisedNext.style || DEFAULT_DIAGRAM_STYLE);
+    const targetSource = next.source ?? applyDiagramStyle(toMermaid(next), next.style || DEFAULT_DIAGRAM_STYLE);
     const targetType = isFlowchartSource(targetSource);
     if (!targetType) {
       setViewMode("mermaid");
@@ -760,7 +759,7 @@ export function MermaidEditor() {
     let storageAvailable = false;
     try {
       const library = initialiseLocalDiagramLibrary(getBrowserStorage(), restored, restored.name);
-      restored = normaliseStoredDiagram(restoreStoredDiagram(library.document?.diagram) ?? restored);
+      restored = restoreStoredDiagram(library.document?.diagram) ?? restored;
       index = library.index;
       storageAvailable = library.storageAvailable;
     } catch {

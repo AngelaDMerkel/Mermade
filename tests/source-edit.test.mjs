@@ -110,10 +110,10 @@ test("non-flowchart source is rejected before validation without changing the do
 });
 
 test("restoration leaves unsupported source untouched even when its body resembles a flowchart", async () => {
-  const { restoreStoredDiagram, normaliseStoredDiagram } = await loadTypeScript(new URL("../app/editor/diagram-model.ts", import.meta.url));
+  const { restoreStoredDiagram } = await loadTypeScript(new URL("../app/editor/diagram-model.ts", import.meta.url));
   const source = 'sequenceDiagram\n  %% retained text\n  flowchart LR\n  A[""] --> B';
   const stored = { ...createBlankDiagram("Archived"), source };
-  assert.equal(normaliseStoredDiagram(restoreStoredDiagram(stored)).source, source);
+  assert.equal(restoreStoredDiagram(stored).source, source);
 });
 
 test("unsupported saved documents discard stale visual projections without changing source", async () => {
@@ -123,4 +123,26 @@ test("unsupported saved documents discard stale visual projections without chang
   assert.equal(restored.source, source);
   assert.deepEqual([restored.nodes, restored.edges, restored.groups], [[], [], []]);
   assert.equal(restored.name, initialDiagram.name);
+});
+
+test("projection ignores YAML metadata and retains stored positions while placing missing nodes", () => {
+  const source = '---\ntitle: |\n  Ghost\n  Fake[Metadata]\n---\nflowchart LR\n A[Start] --> B[Finish]';
+  const first = parseMermaid(source, createBlankDiagram());
+  assert.deepEqual(first.nodes.map((node) => node.id), ["A", "B"]);
+  const cached = { ...first, source, nodes: [{ ...first.nodes[0], x: 912, y: 345 }] };
+  const projected = parseMermaid(source, cached);
+  assert.deepEqual([projected.nodes[0].x, projected.nodes[0].y], [912, 345]);
+  assert.ok(Number.isFinite(projected.nodes[1].x));
+  assert.notEqual(projected.nodes[1].x, 0);
+});
+
+test("restoration repairs source once and discards stale projections of unprojectable flowcharts", async () => {
+  const { restoreStoredDiagram, initialDiagram } = await loadTypeScript(new URL("../app/editor/diagram-model.ts", import.meta.url));
+  const repaired = restoreStoredDiagram({ ...createBlankDiagram(), source: 'flowchart LR\n A[""] --> B' });
+  assert.match(repaired.source, /A\[" "\]/);
+  assert.deepEqual(repaired.nodes.map((node) => node.id), ["A", "B"]);
+  const source = 'flowchart LR; node1[Original]';
+  const unprojected = restoreStoredDiagram({ ...initialDiagram, source });
+  assert.equal(unprojected.source, source);
+  assert.deepEqual([unprojected.nodes, unprojected.edges, unprojected.groups], [[], [], []]);
 });

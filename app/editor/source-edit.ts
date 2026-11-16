@@ -1,5 +1,5 @@
 import { readDiagramStyle } from "../mermaid-style";
-import { isFlowchartSource, FLOWCHART_ONLY_MESSAGE } from "../mermaid-types";
+import { isFlowchartSource, FLOWCHART_ONLY_MESSAGE } from "../mermaid-source";
 import { parseMermaid } from "./diagram-model";
 import type { Diagram, SupportedMermaidVersion } from "./diagram-types";
 import type { DocumentSession } from "./document-session";

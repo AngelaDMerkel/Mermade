@@ -1,4 +1,4 @@
-import { requireFlowchartSource } from "./mermaid-types";
+import { requireFlowchartSource, splitFrontmatter } from "./mermaid-source";
 import { BeautifulTextRoles, polishedTextRoles, PolishedStyle, themeForPolishedRenderer } from "./beautiful-mermaid-config";
 
 export {
@@ -11,12 +11,6 @@ export {
   themeForPolishedRenderer,
 } from "./beautiful-mermaid-config";
 export type { BeautifulThemeColours, PolishedCustomColours, PolishedPaletteMode, PolishedStyle, PolishedTheme } from "./beautiful-mermaid-config";
-
-function withoutFrontmatter(source: string) {
-  const trimmed = source.trimStart();
-  if (!trimmed.startsWith("---")) return trimmed;
-  return trimmed.replace(/^---\s*\r?\n[\s\S]*?\r?\n---\s*(?:\r?\n|$)/, "").trimStart();
-}
 
 function legacyNodeSyntax(id: string, shape: string, label: string) {
   const text = label.replaceAll("\\\"", "\"").replaceAll("\"", "'");
@@ -80,7 +74,7 @@ function withoutFlowchartPresentationDirectives(source: string) {
  */
 export function sourceForPolishedRenderer(source: string, respectSourceStyles = false) {
   requireFlowchartSource(source);
-  const withoutYaml = withoutFrontmatter(source).replace(/^(\s*)flowchart-elk\b/im, "$1flowchart");
+  const withoutYaml = splitFrontmatter(source).body.trimStart().replace(/^(\s*)flowchart-elk\b/im, "$1flowchart");
   const adapted = supplyBeautifulFlowchartDirection(adaptExpandedFlowchartNodes(withoutYaml));
   return respectSourceStyles ? adapted : withoutFlowchartPresentationDirectives(adapted);
 }
@@ -165,9 +159,4 @@ export async function renderPolishedSvg(source: string, style: PolishedStyle) {
     componentSpacing: style.componentSpacing,
     transparent: style.transparent,
   }), textRoles);
-}
-
-export async function renderPolishedAscii(source: string, useAscii = true) {
-  const { renderMermaidASCII } = await import("beautiful-mermaid");
-  return renderMermaidASCII(sourceForPolishedRenderer(source), { colorMode: "none", useAscii });
 }

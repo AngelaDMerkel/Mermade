@@ -1,13 +1,20 @@
 export const FLOWCHART_TEMPLATE = "flowchart LR\n  start([Start]) --> finish([Finish])";
 
-function withoutFrontmatter(source: string) {
-  const trimmed = source.trimStart();
-  if (!trimmed.startsWith("---")) return trimmed;
-  return trimmed.replace(/^---\s*\r?\n[\s\S]*?\r?\n---\s*(?:\r?\n|$)/, "").trimStart();
+export function splitFrontmatter(source: string) {
+  const leading = source.match(/^\s*/)?.[0] || "";
+  const trimmed = source.slice(leading.length);
+  if (!trimmed.startsWith("---")) return { leading, lines: [] as string[], body: trimmed };
+  const match = trimmed.match(/^---\s*\r?\n([\s\S]*?)\r?\n---\s*(?:\r?\n|$)/);
+  if (!match) return { leading, lines: [] as string[], body: trimmed };
+  return {
+    leading,
+    lines: match[1].split(/\r?\n/),
+    body: trimmed.slice(match[0].length),
+  };
 }
 
 export function isFlowchartSource(source: string) {
-  const body = withoutFrontmatter(source);
+  const body = splitFrontmatter(source).body;
   const declaration = body.split(/\r?\n/).find((line) => {
     const trimmed = line.trim();
     return trimmed && !trimmed.startsWith("%%");

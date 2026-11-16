@@ -32,7 +32,7 @@ test("uses British English in authored interface and documentation copy", async 
   const [editor, help, types, shapes, layout, readme] = await Promise.all([
     readFile(new URL("../app/mermaid-editor.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/mermaid-help.ts", import.meta.url), "utf8"),
-    readFile(new URL("../app/mermaid-types.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/mermaid-source.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/flowchart-shapes.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../README.md", import.meta.url), "utf8"),

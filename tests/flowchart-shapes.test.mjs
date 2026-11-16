@@ -1,15 +1,9 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import ts from "typescript";
+import { loadTypeScript } from "./helpers/load-typescript.mjs";
 
-async function loadShapes() {
-  const source = await readFile(new URL("../app/flowchart-shapes.ts", import.meta.url), "utf8");
-  const javascript = ts.transpileModule(source, {
-    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
-  }).outputText;
-  return import(`data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`);
-}
+const loadShapes = () => loadTypeScript(new URL("../app/flowchart-shapes.ts", import.meta.url));
 
 test("prioritizes eight semantically named common flowchart shapes", async () => {
   const { FLOWCHART_SHAPE_GROUPS } = await loadShapes();

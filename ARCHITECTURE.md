@@ -18,13 +18,14 @@ source that the projection cannot represent.
 ## Module responsibilities
 
 - `diagram-types.ts`: the persisted document and visual graph contracts.
-- `diagram-model.ts`: starter/blank documents, source projection, serialisation and existing restoration/normalisation rules. No React or browser APIs.
+- `diagram-model.ts`: starter/blank documents, source projection, serialisation and a single storage restoration pass. No React or browser APIs.
 - `mermaid-version.ts`: bundled engine selection and syntax version hints.
 - `document-session.ts`: immutable document transitions, bounded history and async edit tickets. No React or renderer dependency.
 - `use-document-session.ts`: React subscription and unmount invalidation.
 - `source-edit.ts`: candidate preparation, injected validation and conditional commit. The UI receives success, rejection or cancellation.
 - `mermaid-runtime.ts`: lazy engine/layout imports, strict configuration, serialised validation/rendering and temporary DOM cleanup.
 - `browser-storage.ts`: safe acquisition of browser storage. The existing `local-diagram-library.ts` owns the on-disk keys and library format.
+- `mermaid-source.ts`: flowchart scope and frontmatter splitting shared by projection, style and export.
 - `mermaid-editor.tsx`: UI, canvas gestures, selection, local library orchestration and renderer presentation.
 
 ## Adding or changing editing features
@@ -74,11 +75,15 @@ rendering off the main thread or cancel already-running Mermaid work.
 ## Flowchart-only scope
 
 The editor accepts only `flowchart`, `graph`, and `flowchart-elk` declarations.
-`mermaid-types.ts` recognises these after frontmatter and comments; source
+`mermaid-source.ts` recognises these after frontmatter and comments; source
 transactions and both presentation adapters enforce the same policy before
 calling a renderer. Mermaid remains the syntax authority after that check.
 There is no diagram-family registry, type picker, Structured/Data workspace,
 Gantt model, ZenUML plugin, or Block renderer patch.
+
+Restoration repairs and projects supported source once. It indexes cached nodes
+and skips layout when every projected node already has a stored position.
+Unprojectable documents have no cached visual elements.
 
 Restoration preserves older non-flowchart source verbatim. The library keeps
 those documents available, while the UI disables visual tools and offers source

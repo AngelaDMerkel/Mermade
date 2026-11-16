@@ -1,15 +1,8 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
-import ts from "typescript";
+import { loadTypeScript } from "./helpers/load-typescript.mjs";
 
-async function loadStyleHelpers() {
-  const source = await readFile(new URL("../app/mermaid-style.ts", import.meta.url), "utf8");
-  const javascript = ts.transpileModule(source, {
-    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
-  }).outputText;
-  return import(`data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`);
-}
+const loadStyleHelpers = () => loadTypeScript(new URL("../app/mermaid-style.ts", import.meta.url));
 
 test("writes diagram-wide style as Mermaid frontmatter", async () => {
   const { applyDiagramStyle, DEFAULT_DIAGRAM_STYLE } = await loadStyleHelpers();
