@@ -90,3 +90,18 @@ The build retains a narrowly scoped ELK compatibility patch: ELK graph logging
 and cloning must omit DOM-backed fields to avoid React's circular metadata.
 The former Block and Gantt patches are removed. The real browser suite tests ELK
 inside React, since standalone Mermaid rendering does not expose this failure.
+
+## Layout cost
+
+FreeForm layout builds layer and lane membership once, reuses node order between
+crossing-reduction passes, and scores each node once per pass. Cycle detection
+uses iterative graph traversals, so long imported chains do not exhaust the
+JavaScript call stack. The previous implementation rescanned the full graph for
+each rank/lane and rebuilt all layer positions for every sort.
+
+`npm run benchmark:layout` measures synthetic 1,000-node chains and 600-node
+grouped graphs. A local comparison measured medians of 280 ms → 2.1 ms and
+24.9 ms → 1.4 ms respectively; these are layout-only timings, not browser-render
+benchmarks. A seeded differential check retained identical coordinates, ranks,
+and iteration order in 600 comparisons. Regression coverage includes 6,000-node
+chains and cycles.

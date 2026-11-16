@@ -14,7 +14,8 @@
     "test": "MERMADE_TEST_BUILD=true npm run build && MERMADE_TEST_BUILD=true node --test tests/*.test.mjs",
     "test:unit": "npm run patch:elk && node scripts/test-unit.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern .next-test",
-    "patch:elk": "node scripts/patch-mermaid-elk.mjs"
+    "patch:elk": "node scripts/patch-mermaid-elk.mjs",
+    "benchmark:layout": "node scripts/benchmark-layout.mjs"
   },
   "dependencies": {
     "@mermaid-js/layout-elk": "^0.2.2",

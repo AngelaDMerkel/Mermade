@@ -17,44 +17,54 @@ const RANK_GAP = 150;
 const NODE_GAP = 76;
 const LANE_GAP = 132;
 
-function stronglyConnectedComponents(nodes: FlowchartLayoutNode[], outgoing: Map<string, string[]>) {
-  let nextIndex = 0;
-  const indices = new Map<string, number>();
-  const lowLinks = new Map<string, number>();
-  const stack: string[] = [];
-  const stacked = new Set<string>();
-  const components: string[][] = [];
-
-  const visit = (id: string) => {
-    indices.set(id, nextIndex);
-    lowLinks.set(id, nextIndex);
-    nextIndex += 1;
-    stack.push(id);
-    stacked.add(id);
-
-    for (const target of outgoing.get(id) ?? []) {
-      if (!indices.has(target)) {
-        visit(target);
-        lowLinks.set(id, Math.min(lowLinks.get(id)!, lowLinks.get(target)!));
-      } else if (stacked.has(target)) {
-        lowLinks.set(id, Math.min(lowLinks.get(id)!, indices.get(target)!));
+function stronglyConnectedComponents(
+  nodes: FlowchartLayoutNode[],
+  outgoing: Map<string, string[]>,
+  incoming: Map<string, string[]>,
+) {
+  // Iterative depth-first traversal keeps long imported chains off the JS call
+  // stack. Finish order followed by reverse traversal identifies each cycle.
+  const visited = new Set<string>();
+  const finishOrder: string[] = [];
+  for (const node of nodes) {
+    if (visited.has(node.id)) continue;
+    visited.add(node.id);
+    const pending = [{ id: node.id, next: 0 }];
+    while (pending.length) {
+      const frame = pending[pending.length - 1];
+      const targets = outgoing.get(frame.id)!;
+      if (frame.next < targets.length) {
+        const target = targets[frame.next++];
+        if (!visited.has(target)) {
+          visited.add(target);
+          pending.push({ id: target, next: 0 });
+        }
+      } else {
+        finishOrder.push(frame.id);
+        pending.pop();
       }
     }
+  }
 
-    if (lowLinks.get(id) !== indices.get(id)) return;
+  const assigned = new Set<string>();
+  const components: string[][] = [];
+  for (let index = finishOrder.length - 1; index >= 0; index--) {
+    const root = finishOrder[index];
+    if (assigned.has(root)) continue;
+    assigned.add(root);
+    const pending = [root];
     const component: string[] = [];
-    let member = "";
-    do {
-      member = stack.pop()!;
-      stacked.delete(member);
-      component.push(member);
-    } while (member !== id);
+    while (pending.length) {
+      const id = pending.pop()!;
+      component.push(id);
+      for (const parent of incoming.get(id)!) {
+        if (assigned.has(parent)) continue;
+        assigned.add(parent);
+        pending.push(parent);
+      }
+    }
     components.push(component);
-  };
-
-  nodes.forEach((node) => {
-    if (!indices.has(node.id)) visit(node.id);
-  });
+  }
   return components;
 }
 
@@ -73,13 +83,16 @@ export function layoutFlowchart(
   const outgoing = new Map(nodes.map((node) => [node.id, [] as string[]]));
   const incoming = new Map(nodes.map((node) => [node.id, [] as string[]]));
 
+  const seenEdges = new Map(nodes.map((node) => [node.id, new Set<string>()]));
   for (const edge of edges) {
     if (!nodeById.has(edge.from) || !nodeById.has(edge.to) || edge.from === edge.to) continue;
-    if (!outgoing.get(edge.from)!.includes(edge.to)) outgoing.get(edge.from)!.push(edge.to);
-    if (!incoming.get(edge.to)!.includes(edge.from)) incoming.get(edge.to)!.push(edge.from);
+    if (seenEdges.get(edge.from)!.has(edge.to)) continue;
+    seenEdges.get(edge.from)!.add(edge.to);
+    outgoing.get(edge.from)!.push(edge.to);
+    incoming.get(edge.to)!.push(edge.from);
   }
 
-  const components = stronglyConnectedComponents(nodes, outgoing);
+  const components = stronglyConnectedComponents(nodes, outgoing, incoming);
   const componentOf = new Map<string, number>();
   components.forEach((component, index) => component.forEach((id) => componentOf.set(id, index)));
   const componentOutgoing = new Map(components.map((_, index) => [index, new Set<number>()]));
@@ -93,88 +106,91 @@ export function layoutFlowchart(
     indegree.set(to, indegree.get(to)! + 1);
   }
 
-  const componentOrder = (component: number) => Math.min(...components[component].map((id) => sourceOrder.get(id)!));
-  const queue = components.map((_, index) => index)
-    .filter((index) => indegree.get(index) === 0)
-    .sort((a, b) => componentOrder(a) - componentOrder(b));
+  const queue = components.map((_, index) => index).filter((index) => indegree.get(index) === 0);
   const rankByComponent = new Map(components.map((_, index) => [index, 0]));
 
-  while (queue.length) {
-    const component = queue.shift()!;
+  for (let index = 0; index < queue.length; index++) {
+    const component = queue[index];
     for (const target of componentOutgoing.get(component)!) {
       rankByComponent.set(target, Math.max(rankByComponent.get(target)!, rankByComponent.get(component)! + 1));
       indegree.set(target, indegree.get(target)! - 1);
       if (indegree.get(target) === 0) {
         queue.push(target);
-        queue.sort((a, b) => componentOrder(a) - componentOrder(b));
       }
     }
   }
 
   const rankOf = new Map(nodes.map((node) => [node.id, rankByComponent.get(componentOf.get(node.id)!) ?? 0]));
   const maxRank = Math.max(0, ...rankOf.values());
-  const orderedLayers = Array.from({ length: maxRank + 1 }, (_, rank) => (
-    nodes.filter((node) => rankOf.get(node.id) === rank).map((node) => node.id)
-  ));
+  const orderedLayers: string[][] = Array.from({ length: maxRank + 1 }, () => []);
+  nodes.forEach((node) => orderedLayers[rankOf.get(node.id)!].push(node.id));
 
   // Repeated barycentric sweeps reduce crossings while retaining deterministic
   // source order when two nodes have the same relationship weight.
-  const orderIndex = () => new Map(orderedLayers.flatMap((layer) => layer.map((id, index) => [id, index] as const)));
+  const layerOrder = new Map(orderedLayers.flatMap((layer) => layer.map((id, index) => [id, index] as const)));
   const sortLayer = (rank: number, neighbors: Map<string, string[]>) => {
-    const positions = orderIndex();
-    orderedLayers[rank].sort((a, b) => {
-      const score = (id: string) => {
-        const relevant = (neighbors.get(id) ?? []).filter((neighbor) => rankOf.get(neighbor) !== rank);
-        return relevant.length ? relevant.reduce((sum, neighbor) => sum + (positions.get(neighbor) ?? 0), 0) / relevant.length : sourceOrder.get(id)!;
-      };
-      return score(a) - score(b) || sourceOrder.get(a)! - sourceOrder.get(b)!;
-    });
+    const layer = orderedLayers[rank];
+    if (layer.length < 2) return;
+    const scores = new Map(layer.map((id) => {
+      let total = 0;
+      let count = 0;
+      for (const neighbor of neighbors.get(id)!) {
+        if (rankOf.get(neighbor) === rank) continue;
+        total += layerOrder.get(neighbor)!;
+        count++;
+      }
+      return [id, count ? total / count : sourceOrder.get(id)!];
+    }));
+    layer.sort((a, b) => scores.get(a)! - scores.get(b)! || sourceOrder.get(a)! - sourceOrder.get(b)!);
+    layer.forEach((id, index) => layerOrder.set(id, index));
   };
   for (let pass = 0; pass < 3; pass += 1) {
     for (let rank = 1; rank <= maxRank; rank += 1) sortLayer(rank, incoming);
     for (let rank = maxRank - 1; rank >= 0; rank -= 1) sortLayer(rank, outgoing);
   }
 
-  const layerOrder = orderIndex();
-  const laneKeys = [...new Set(nodes.map((node) => node.groupId ? `group:${node.groupId}` : "ungrouped"))]
-    .sort((a, b) => {
-      const first = (key: string) => Math.min(...nodes.filter((node) => (node.groupId ? `group:${node.groupId}` : "ungrouped") === key).map((node) => sourceOrder.get(node.id)!));
-      return first(a) - first(b);
-    });
   const crossSize = (node: FlowchartLayoutNode) => direction === "LR" ? node.height : node.width;
   const mainSize = (node: FlowchartLayoutNode) => direction === "LR" ? node.width : node.height;
-  const nodesInLaneRank = (lane: string, rank: number) => nodes
-    .filter((node) => (node.groupId ? `group:${node.groupId}` : "ungrouped") === lane && rankOf.get(node.id) === rank)
-    .sort((a, b) => layerOrder.get(a.id)! - layerOrder.get(b.id)!);
-
-  const laneSizes = new Map(laneKeys.map((lane) => {
-    const size = Math.max(0, ...Array.from({ length: maxRank + 1 }, (_, rank) => {
-      const members = nodesInLaneRank(lane, rank);
-      return members.reduce((sum, node) => sum + crossSize(node), 0) + Math.max(0, members.length - 1) * NODE_GAP;
-    }));
-    return [lane, Math.max(size, 82)] as const;
-  }));
+  // Build lane/rank membership once; reuse it for measurement and placement.
+  // Map insertion order is already the first source occurrence of each lane.
+  const lanes = new Map<string, Map<number, FlowchartLayoutNode[]>>();
+  for (const node of nodes) {
+    const lane = node.groupId ? `group:${node.groupId}` : "ungrouped";
+    if (!lanes.has(lane)) lanes.set(lane, new Map());
+    const ranks = lanes.get(lane)!;
+    const rank = rankOf.get(node.id)!;
+    if (!ranks.has(rank)) ranks.set(rank, []);
+    ranks.get(rank)!.push(node);
+  }
+  const occupiedSize = (members: FlowchartLayoutNode[]) => members.reduce((sum, node) => sum + crossSize(node), 0) + Math.max(0, members.length - 1) * NODE_GAP;
+  const laneSizes = new Map<string, number>();
+  for (const [lane, ranks] of lanes) {
+    let size = 82;
+    for (const members of ranks.values()) {
+      members.sort((a, b) => layerOrder.get(a.id)! - layerOrder.get(b.id)!);
+      size = Math.max(size, occupiedSize(members));
+    }
+    laneSizes.set(lane, size);
+  }
 
   const laneStarts = new Map<string, number>();
   let crossCursor = ORIGIN;
-  laneKeys.forEach((lane) => {
+  for (const lane of lanes.keys()) {
     laneStarts.set(lane, crossCursor);
     crossCursor += laneSizes.get(lane)! + LANE_GAP;
-  });
+  }
 
   const rankStarts: number[] = [];
   let mainCursor = ORIGIN;
   for (let rank = 0; rank <= maxRank; rank += 1) {
     rankStarts[rank] = mainCursor;
-    const members = nodes.filter((node) => rankOf.get(node.id) === rank);
-    mainCursor += Math.max(82, ...members.map(mainSize)) + RANK_GAP;
+    mainCursor += Math.max(82, ...orderedLayers[rank].map((id) => mainSize(nodeById.get(id)!))) + RANK_GAP;
   }
 
   const positions = new Map<string, { x: number; y: number; rank: number }>();
-  laneKeys.forEach((lane) => {
-    for (let rank = 0; rank <= maxRank; rank += 1) {
-      const members = nodesInLaneRank(lane, rank);
-      const occupied = members.reduce((sum, node) => sum + crossSize(node), 0) + Math.max(0, members.length - 1) * NODE_GAP;
+  lanes.forEach((ranks, lane) => {
+    for (const [rank, members] of [...ranks].sort(([a], [b]) => a - b)) {
+      const occupied = occupiedSize(members);
       let memberCross = laneStarts.get(lane)! + (laneSizes.get(lane)! - occupied) / 2;
       for (const node of members) {
         const main = rankStarts[rank];
