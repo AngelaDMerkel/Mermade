@@ -1,4 +1,3 @@
-import zenuml from "@mermaid-js/mermaid-zenuml";
 import elkLayouts from "@mermaid-js/layout-elk";
 import tidyTreeLayouts from "@mermaid-js/layout-tidy-tree";
 import mermaid from "mermaid";
@@ -6,7 +5,7 @@ import mermaidV10 from "mermaid-v10";
 import { FLOWCHART_SHAPES } from "../../app/flowchart-shapes";
 import { decorateRenderedStatements, normalizeRenderedSvg } from "../../app/mermaid-rendering";
 import { applyDiagramStyle, DEFAULT_DIAGRAM_STYLE } from "../../app/mermaid-style";
-import { MERMAID_DIAGRAM_TYPES } from "../../app/mermaid-types";
+import { FLOWCHART_TEMPLATE } from "../../app/mermaid-source";
 
 type RenderMeasurement = {
   id: string;
@@ -23,10 +22,14 @@ type RenderMeasurement = {
   readableEdgeCount: number;
   appearanceSignature: string;
   layoutSignature: string;
-  c4Title?: { x: number; expectedX: number; textAnchor: string };
 };
 
-const byId = new Map(MERMAID_DIAGRAM_TYPES.map((type) => [type.id, type]));
+const fixtures = [
+  { id: "flowchart", label: "Flowchart", template: FLOWCHART_TEMPLATE },
+  { id: "graph", label: "Legacy graph declaration", template: "graph TD\n A[Start] --> B[Finish]" },
+  { id: "elk", label: "ELK declaration", template: "flowchart-elk LR\n A[Start] --> B[Finish]" },
+];
+const byId = new Map(fixtures.map((type) => [type.id, type]));
 const shapeById = new Map(FLOWCHART_SHAPES.map((shape) => [shape.id, shape]));
 let renderSequence = 0;
 
@@ -86,7 +89,7 @@ async function renderSource(id: string, label: string, diagramTypeId: string, so
     const svg = host.querySelector("svg");
     if (!svg) throw new Error(`${label} did not produce an SVG element`);
 
-    normalizeRenderedSvg(svg, diagramTypeId, source);
+    normalizeRenderedSvg(svg);
 
     const content = [...svg.querySelectorAll<SVGGraphicsElement>(
       "text, foreignObject, rect, circle, ellipse, path, polygon, polyline, line",
@@ -112,11 +115,6 @@ async function renderSource(id: string, label: string, diagramTypeId: string, so
         return matrix ? `${Math.round(matrix.e)},${Math.round(matrix.f)},${Math.round(box.width)},${Math.round(box.height)}` : "";
       })
       .join("|");
-    const titleText = source.match(/^\s*title\s+(.+?)\s*$/m)?.[1];
-    const title = diagramTypeId === "c4" && titleText
-      ? [...svg.children].find((element) => element.tagName.toLowerCase() === "text" && element.textContent?.trim() === titleText) as SVGTextElement | undefined
-      : undefined;
-
     return {
       id,
       label,
@@ -132,11 +130,6 @@ async function renderSource(id: string, label: string, diagramTypeId: string, so
       readableEdgeCount: edges.filter((edge) => Number.parseFloat(edge.style.strokeWidth) >= 1.5 || edge.classList.contains("edge-thickness-thick")).length,
       appearanceSignature,
       layoutSignature,
-      c4Title: title ? {
-        x: Number(title.getAttribute("x")),
-        expectedX: viewBox.x + viewBox.width / 2,
-        textAnchor: title.getAttribute("text-anchor") ?? "",
-      } : undefined,
     };
   } finally {
     host.remove();
@@ -146,54 +139,6 @@ async function renderSource(id: string, label: string, diagramTypeId: string, so
 async function renderStarter(id: string) {
   const type = typeFor(id);
   return renderSource(type.id, type.label, type.id, type.template);
-}
-
-async function inspectGanttSelection(source: string) {
-  const host = document.createElement("div");
-  host.style.cssText = "position:fixed;left:-100000px;top:0;visibility:hidden;width:1600px;height:1200px";
-  document.body.append(host);
-  try {
-    const parsed = await mermaid.parse(source);
-    const { svg: markup } = await mermaid.render(`gantt-selection-${++renderSequence}`, source, host);
-    host.innerHTML = markup;
-    const svg = host.querySelector("svg");
-    if (!svg) throw new Error("Gantt did not produce an SVG element");
-    decorateRenderedStatements(svg, source);
-    const taskText = [...svg.querySelectorAll<SVGTextElement>("text.taskText, text[class*='taskTextOutside']")];
-    const sectionText = [...svg.querySelectorAll<SVGTextElement>("text.sectionTitle")];
-    const taskBars = [...svg.querySelectorAll<SVGRectElement>("rect.task, rect[class*='task']")]
-      .filter((element) => !element.classList.contains("section"));
-    return {
-      diagramType: parsed.diagramType,
-      taskLines: taskText.map((element) => element.dataset.sourceLine),
-      sectionLines: sectionText.map((element) => element.dataset.sourceLine),
-      barLines: taskBars.map((element) => element.dataset.sourceLine),
-    };
-  } finally {
-    host.remove();
-  }
-}
-
-function inspectDuplicateGanttIdSelection() {
-  const namespace = "http://www.w3.org/2000/svg";
-  const svg = document.createElementNS(namespace, "svg");
-  const source = "gantt\n  dateFormat YYYY-MM-DD\n  section Shipping\n  Floor Grouping and Matrix :active, ship4, 2026-08-10, 10d\n  Training :ship4, 2026-08-16, 31d";
-  for (const label of ["Floor Grouping and Matrix", "Training"]) {
-    const bar = document.createElementNS(namespace, "rect");
-    bar.id = "ship4";
-    bar.classList.add("task");
-    svg.append(bar);
-    const text = document.createElementNS(namespace, "text");
-    text.id = "ship4-text";
-    text.classList.add("taskText");
-    text.textContent = label;
-    svg.append(text);
-  }
-  decorateRenderedStatements(svg, source);
-  return {
-    taskLines: [...svg.querySelectorAll<SVGTextElement>("text.taskText")].map((element) => element.dataset.sourceLine),
-    barLines: [...svg.querySelectorAll<SVGRectElement>("rect.task")].map((element) => element.dataset.sourceLine),
-  };
 }
 
 async function inspectRepeatedFlowchartLabelSelection() {
@@ -248,14 +193,12 @@ const STYLE_FLOWCHART = `flowchart TB
   C --> F[Revise]`;
 
 async function renderStyleVariant(kind: "theme" | "look" | "layout", value: string) {
-  const diagramTypeId = kind === "layout" && value === "cose-bilkent" ? "mindmap" : "flowchart";
-  const baseSource = diagramTypeId === "mindmap" ? typeFor("mindmap").template : STYLE_FLOWCHART;
-  const source = applyDiagramStyle(baseSource, {
+  const source = applyDiagramStyle(STYLE_FLOWCHART, {
     ...DEFAULT_DIAGRAM_STYLE,
     [kind]: value,
   });
   const parsed = await mermaid.parse(source);
-  const rendered = await renderSource(`${kind}-${value}`, `${kind} ${value}`, diagramTypeId, source);
+  const rendered = await renderSource(`${kind}-${value}`, `${kind} ${value}`, "flowchart", source);
   return { ...rendered, diagramType: parsed.diagramType, source };
 }
 
@@ -284,7 +227,6 @@ async function renderShape(id: string) {
 }
 
 mermaid.registerLayoutLoaders([...elkLayouts, ...tidyTreeLayouts]);
-await mermaid.registerExternalDiagrams([zenuml]);
 mermaid.initialize({
   startOnLoad: false,
   theme: "base",
@@ -295,7 +237,7 @@ mermaid.initialize({
 Object.assign(window, {
   mermadeStandards: {
     ready: true,
-    types: MERMAID_DIAGRAM_TYPES.map(({ id, label, family, template }) => ({ id, label, family, template })),
+    types: fixtures,
     shapes: FLOWCHART_SHAPES.map(({ id, label, mermaidShape }) => ({ id, label, mermaidShape })),
     parseStarter,
     renderStarter,
@@ -305,8 +247,6 @@ Object.assign(window, {
     parseLegacyStyledFlowchart,
     parseShape,
     renderShape,
-    inspectGanttSelection,
-    inspectDuplicateGanttIdSelection,
     inspectRepeatedFlowchartLabelSelection,
   },
 });

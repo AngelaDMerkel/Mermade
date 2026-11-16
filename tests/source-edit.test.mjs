@@ -43,12 +43,12 @@ test("newer requests win even when older validation finishes last", async () => 
   const session = new DocumentSession(createBlankDiagram());
   const gate = deferred();
   const old = commitValidatedSource(session, "flowchart LR\n A --> B", () => gate.promise);
-  const source = "sequenceDiagram\n Alice->>Bob: Hi";
+  const source = "flowchart TB\n X --> Y";
   assert.equal((await commitValidatedSource(session, source, valid)).ok, true);
   gate.resolve("");
   assert.equal((await old).cancelled, true);
   assert.equal(session.getSnapshot().source, source);
-  assert.deepEqual(session.getSnapshot().nodes, []);
+  assert.deepEqual(session.getSnapshot().nodes.map((node) => node.id), ["X", "Y"]);
 });
 
 test("intervening edits and draft changes invalidate pending source commits", async () => {
@@ -94,4 +94,55 @@ test("projection keeps stored positions for unchanged source and safe empty labe
   const projected = parseMermaid(source, first);
   assert.equal(projected.nodes[0].x, 912);
   assert.match(nodeSyntax({ ...projected.nodes[0], label: "" }), /" "/);
+});
+
+test("non-flowchart source is rejected before validation without changing the document or history", async () => {
+  const original = createBlankDiagram("Keep me");
+  const session = new DocumentSession(original);
+  for (const source of ["sequenceDiagram\n A->>B: Hi", "pie\n \"A\": 1", "gantt\n title Plan", "unknown"]) {
+    const result = await commitValidatedSource(session, source, async () => { throw new Error("Validator must not run"); });
+    assert.equal(result.ok, false);
+    assert.match(result.error, /supports flowcharts only/);
+    assert.equal(session.getSnapshot(), original);
+    session.undo();
+    assert.equal(session.getSnapshot(), original);
+  }
+});
+
+test("restoration leaves unsupported source untouched even when its body resembles a flowchart", async () => {
+  const { restoreStoredDiagram } = await loadTypeScript(new URL("../app/editor/diagram-model.ts", import.meta.url));
+  const source = 'sequenceDiagram\n  %% retained text\n  flowchart LR\n  A[""] --> B';
+  const stored = { ...createBlankDiagram("Archived"), source };
+  assert.equal(restoreStoredDiagram(stored).source, source);
+});
+
+test("unsupported saved documents discard stale visual projections without changing source", async () => {
+  const { restoreStoredDiagram, initialDiagram } = await loadTypeScript(new URL("../app/editor/diagram-model.ts", import.meta.url));
+  const source = "sequenceDiagram\n Alice->>Bob: Preserve";
+  const restored = restoreStoredDiagram({ ...initialDiagram, source });
+  assert.equal(restored.source, source);
+  assert.deepEqual([restored.nodes, restored.edges, restored.groups], [[], [], []]);
+  assert.equal(restored.name, initialDiagram.name);
+});
+
+test("projection ignores YAML metadata and retains stored positions while placing missing nodes", () => {
+  const source = '---\ntitle: |\n  Ghost\n  Fake[Metadata]\n---\nflowchart LR\n A[Start] --> B[Finish]';
+  const first = parseMermaid(source, createBlankDiagram());
+  assert.deepEqual(first.nodes.map((node) => node.id), ["A", "B"]);
+  const cached = { ...first, source, nodes: [{ ...first.nodes[0], x: 912, y: 345 }] };
+  const projected = parseMermaid(source, cached);
+  assert.deepEqual([projected.nodes[0].x, projected.nodes[0].y], [912, 345]);
+  assert.ok(Number.isFinite(projected.nodes[1].x));
+  assert.notEqual(projected.nodes[1].x, 0);
+});
+
+test("restoration repairs source once and discards stale projections of unprojectable flowcharts", async () => {
+  const { restoreStoredDiagram, initialDiagram } = await loadTypeScript(new URL("../app/editor/diagram-model.ts", import.meta.url));
+  const repaired = restoreStoredDiagram({ ...createBlankDiagram(), source: 'flowchart LR\n A[""] --> B' });
+  assert.match(repaired.source, /A\[" "\]/);
+  assert.deepEqual(repaired.nodes.map((node) => node.id), ["A", "B"]);
+  const source = 'flowchart LR; node1[Original]';
+  const unprojected = restoreStoredDiagram({ ...initialDiagram, source });
+  assert.equal(unprojected.source, source);
+  assert.deepEqual([unprojected.nodes, unprojected.edges, unprojected.groups], [[], [], []]);
 });

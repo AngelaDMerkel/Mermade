@@ -1,3 +1,5 @@
+import { isFlowchartSource, FLOWCHART_ONLY_MESSAGE, splitFrontmatter } from "./mermaid-source";
+
 export type UnicodeExportResult = {
   content: string;
   html?: string;
@@ -21,10 +23,7 @@ type UnicodeWorkerMessage =
   | { ok: false; error: string };
 
 function semanticSourceLines(source: string) {
-  const withoutFrontmatter = source.trimStart().startsWith("---")
-    ? source.trimStart().replace(/^---\s*\r?\n[\s\S]*?\r?\n---\s*(?:\r?\n|$)/, "")
-    : source;
-  return withoutFrontmatter
+  return splitFrontmatter(source).body
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter((line) => line
@@ -48,6 +47,7 @@ export function createUnicodeSourceOutline(source: string, reason = "The spatial
 }
 
 export function renderTextDiagram(source: string, format: TextDiagramFormat, timeoutMs = 20_000, theme?: TextDiagramTheme): Promise<UnicodeExportResult> {
+  if (!isFlowchartSource(source)) return Promise.resolve({ content: "", simplified: false, error: FLOWCHART_ONLY_MESSAGE });
   if (typeof Worker === "undefined") {
     return Promise.resolve({
       content: createUnicodeSourceOutline(source),
@@ -88,8 +88,4 @@ export function renderTextDiagram(source: string, format: TextDiagramFormat, tim
     });
     worker.postMessage({ source, format, theme });
   });
-}
-
-export function renderUnicodeDiagram(source: string, timeoutMs = 20_000) {
-  return renderTextDiagram(source, "unicode", timeoutMs);
 }

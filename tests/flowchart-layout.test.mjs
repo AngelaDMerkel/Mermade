@@ -1,15 +1,8 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
-import ts from "typescript";
+import { loadTypeScript } from "./helpers/load-typescript.mjs";
 
-async function loadLayout() {
-  const source = await readFile(new URL("../app/flowchart-layout.ts", import.meta.url), "utf8");
-  const javascript = ts.transpileModule(source, {
-    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
-  }).outputText;
-  return import(`data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`);
-}
+const loadLayout = () => loadTypeScript(new URL("../app/flowchart-layout.ts", import.meta.url));
 
 const nodes = [
   { id: "start", width: 150, height: 62 },
@@ -75,4 +68,20 @@ test("places cycles safely in one rank", async () => {
 
   assert.equal(new Set([...positions.values()].map((position) => position.rank)).size, 1);
   assert.ok([...positions.values()].flatMap((position) => [position.x, position.y]).every(Number.isFinite));
+});
+
+test("long chains and cycles do not exhaust the JavaScript call stack", async () => {
+  const { layoutFlowchart } = await loadLayout();
+  const large = Array.from({ length: 6_000 }, (_, index) => ({ id: `n${index}`, width: 150, height: 62 }));
+  const links = large.slice(1).map((node, index) => ({ from: large[index].id, to: node.id }));
+  const chain = layoutFlowchart(large, links, "TB");
+  assert.equal(chain.size, large.length);
+  for (const edge of links) {
+    assert.equal(chain.get(edge.to).rank, chain.get(edge.from).rank + 1);
+    assert.ok(chain.get(edge.to).y > chain.get(edge.from).y);
+  }
+  const cycle = layoutFlowchart(large, [...links, { from: large.at(-1).id, to: large[0].id }], "LR");
+  assert.equal(cycle.size, large.length);
+  assert.deepEqual(new Set([...cycle.values()].map(({ rank }) => rank)), new Set([0]));
+  assert.ok([...cycle.values()].every(({ x, y }) => Number.isFinite(x) && Number.isFinite(y)));
 });

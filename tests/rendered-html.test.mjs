@@ -32,7 +32,7 @@ test("uses British English in authored interface and documentation copy", async 
   const [editor, help, types, shapes, layout, readme] = await Promise.all([
     readFile(new URL("../app/mermaid-editor.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/mermaid-help.ts", import.meta.url), "utf8"),
-    readFile(new URL("../app/mermaid-types.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/mermaid-source.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/flowchart-shapes.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../README.md", import.meta.url), "utf8"),
@@ -43,9 +43,8 @@ test("uses British English in authored interface and documentation copy", async 
   assert.match(editor, />Text colour</);
   assert.match(editor, /aria-label="Colour theme"/);
   assert.doesNotMatch(editor, /Base — customizable|>Fill color|>Text color|aria-label="Color theme"/);
-  assert.match(help, /Visualise work items/);
   assert.doesNotMatch(help, /\bVisualize\b|\brecognized\b|\bnormalized\b|\bOrganize\b|\bcolor\b/);
-  assert.match(types, /label: "Event Modelling"/);
+  assert.match(types, /supports flowcharts only/);
   assert.match(shapes, /label: "Specialised"/);
   assert.match(layout, /<html lang="en-GB">/);
   assert.doesNotMatch(readme, /\bOrganize\b|\borganized\b|\bcolors\b|\bnormalization\b|\bbehavior\b/);
@@ -71,7 +70,7 @@ test("keeps imported Mermaid source authoritative until the user changes its sty
   assert.doesNotMatch(editor, /applyDiagramStyle\(diagram\.source \?\? toMermaid\(diagram\)/);
   assert.doesNotMatch(editor, /mermaid\.initialize\(\{[^}]*theme: "base"/);
   assert.match(editor, /renderProfile: imported\.renderProfile/);
-  assert.match(editor, /renderMermaidSvg\(\{ version: activeMermaidVersion, id: renderId, source, renderProfileClass, renderWidth: ganttRenderWidth \}\)/);
+  assert.match(editor, /renderMermaidSvg\(\{ version: activeMermaidVersion, id: renderId, source, renderProfileClass \}\)/);
   assert.match(css, /\.dokuwiki-mermaid \.nodeLabel[^}]*font-size: 12px !important;[^}]*line-height: 1\.5 !important;/);
 });
 
@@ -110,9 +109,9 @@ test("renders discoverable toolbar shortcuts", async () => {
 test("provides dynamic diagram help with external guidance", async () => {
   const editor = await readFile(new URL("../app/mermaid-editor.tsx", import.meta.url), "utf8");
 
-  assert.match(editor, /helpForDiagram\(activeDiagramType\.id\)/);
-  assert.match(editor, /id="help-title">\{activeDiagramType\.label\} help/);
-  assert.match(editor, /\{activeDiagramType\.template\}/);
+  assert.match(editor, /FLOWCHART_HELP/);
+  assert.match(editor, /id="help-title">Flowchart help/);
+  assert.match(editor, /\{FLOWCHART_TEMPLATE\}/);
   assert.match(editor, />Recommended</);
   assert.match(editor, />Avoid</);
   assert.match(editor, />References</);
@@ -153,13 +152,6 @@ test("keeps undo and redo local to focused source text", async () => {
   assert.match(editor, /label="Redo source edit"/);
 });
 
-test("keeps the diagram type picker clickable and compact", async () => {
-  const css = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
-  assert.match(css, /\.canvas-titlebar > div:first-child \{[^}]*pointer-events: auto;/);
-  assert.match(css, /\.diagram-type-trigger \{[^}]*gap: 3px;/);
-  assert.match(css, /\.diagram-type-group button \{[^}]*min-height: 27px;/);
-});
-
 test("supports visible marquee selection in Mermaid view", async () => {
   const [editor, css] = await Promise.all([
     readFile(new URL("../app/mermaid-editor.tsx", import.meta.url), "utf8"),
@@ -176,10 +168,6 @@ test("supports visible marquee selection in Mermaid view", async () => {
   assert.match(css, /\.mermaid-render \[data-node-id\]\.mermade-selected \.label-container path \{[^}]*stroke: var\(--purple\) !important;[^}]*stroke-width: 3\.5px !important;/);
   assert.match(css, /\.diagram-node\.selected \.node-shape \{[^}]*border-color: var\(--purple\);[^}]*drop-shadow\(1px 0 0 var\(--purple\)\)[^}]*drop-shadow\(0 -1px 0 var\(--purple\)\)/);
   assert.doesNotMatch(css, /\.diagram-node\.selected \.node-shape \{[^}]*rgb\(224 9 95 \/ 15%\)/);
-  assert.match(editor, /function toggleRenderedSelection\(element: HTMLElement, selected: boolean\)/);
-  assert.match(editor, /shape\.style\.setProperty\("stroke", "var\(--purple\)", "important"\)/);
-  assert.match(editor, /shape\.dataset\.mermadeSelectionOutline = JSON\.stringify/);
-  assert.match(editor, /delete shape\.dataset\.mermadeSelectionOutline/);
 });
 
 test("keeps large ELK flowcharts centred, selectable, and source-deletable", async () => {
@@ -189,7 +177,7 @@ test("keeps large ELK flowcharts centred, selectable, and source-deletable", asy
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
   ]);
 
-  assert.match(editor, /activeDiagramType\.id === "flowchart" \? flowchartNodeIds\(source\) : \[\]/);
+  assert.match(rendering, /flowchartNodeIds\(source\)/);
   assert.match(editor, /sourceNodeIds\.has\(id\)/);
   assert.match(editor, /left: `max\([^`]+calc\(\(100% - \$\{renderedSize\.width \* zoom\}px\) \/ 2\)\)`/);
   assert.match(rendering, /classList\.add\("mermade-node-hit"\)/);
@@ -208,7 +196,7 @@ test("keeps rendered Mermaid nodes stable between click and double-click", async
   assert.match(editor, /aria-label="Mermaid statement"/);
   assert.match(editor, /await validateAndCommitSource\(lines\.join\("\\n"\)\)/);
   assert.match(editor, /viewMode === "mermaid" && editingNode && selectedNode/);
-  assert.match(editor, /\}, \[documentSession, activeDiagramType\.id, activeMermaidVersion, currentLayoutCompatibilityError, diagramStyle\.layout, renderProfileClass, restoreViewAnchor, source, viewMode\]\);/);
+  assert.match(editor, /\}, \[documentSession, activeMermaidVersion, currentLayoutCompatibilityError, diagramStyle\.layout, renderProfileClass, restoreViewAnchor, source, viewMode\]\);/);
   assert.doesNotMatch(editor, /diagram\.nodes, selected, source, viewMode/);
 });
 
@@ -229,7 +217,7 @@ test("anchors canvas view switches to the same logical node", async () => {
 test("switches directly between canvas views with unmodified number keys", async () => {
   const editor = await readFile(new URL("../app/mermaid-editor.tsx", import.meta.url), "utf8");
 
-  assert.match(editor, /if \(key === "1" \|\| key === "2" \|\| \(key === "3" && polishedSupported\)\)/);
+  assert.match(editor, /if \(key === "1" \|\| key === "2" \|\| \(key === "3" && nativeFlowchart\)\)/);
   assert.match(editor, /if \(key === "3"\) switchWorkspace\("beautiful"\)/);
   assert.match(editor, /else switchCanvasView\(key === "1" \? "free" : "mermaid"\)/);
   assert.match(editor, /aria-keyshortcuts="1"/);
@@ -237,8 +225,8 @@ test("switches directly between canvas views with unmodified number keys", async
   assert.match(editor, /aria-keyshortcuts="3"/);
   assert.match(editor, />FreeForm canvas<\/b><kbd>1<\/kbd>/);
   assert.match(editor, />Mermaid canvas<\/b><kbd>2<\/kbd>/);
-  assert.match(editor, /\{polishedSupported && <div><b>Beautiful workspace<\/b><kbd>3<\/kbd><\/div>}\s*/);
-  assert.match(editor, /targetView === "polished" && !polishedSupported[\s\S]{0,160}is not yet supported by Beautiful Mermaid/);
+  assert.match(editor, /\{nativeFlowchart && <div><b>Beautiful workspace<\/b><kbd>3<\/kbd><\/div>}\s*/);
+  assert.match(editor, /targetView !== "mermaid" && !nativeFlowchart/);
 });
 
 test("loads Beautiful Mermaid as a distinct presentation workspace without replacing canonical source", async () => {
@@ -267,7 +255,7 @@ test("loads Beautiful Mermaid as a distinct presentation workspace without repla
   assert.doesNotMatch(editor, /from "\.\/beautiful-mermaid"/);
   assert.match(editor, /beautifulWorkspacePromise \?\?= import\("\.\/beautiful-mermaid"\)/);
   assert.match(editor, /aria-label="Workspace"/);
-  assert.match(editor, /\{polishedSupported && <nav className="workspace-switcher" aria-label="Workspace">/);
+  assert.match(editor, /\{nativeFlowchart && <nav className="workspace-switcher" aria-label="Workspace">/);
   assert.match(editor, /className="beautiful-inspector-body"/);
   assert.match(editor, /aria-label="Beautiful output preview"/);
   for (const preview of ["Diagram", "Unicode", "ASCII"]) assert.match(editor, new RegExp(`"${preview}"`));
@@ -310,7 +298,7 @@ test("does not disable spatial flowchart editing merely because advanced source 
     readFile(new URL("../app/flowchart-source.ts", import.meta.url), "utf8"),
   ]);
 
-  assert.match(editor, /const nativeFlowchart = activeDiagramType\.id === "flowchart" && diagram\.nodes\.length > 0/);
+  assert.match(editor, /const nativeFlowchart = isFlowchartSource\(source\)/);
   assert.doesNotMatch(editor, /source:\s*preserveFlowchartSource\s*\?/);
   assert.match(editor, /updateFlowchartDirection\(current\.source, direction\)/);
   assert.match(editor, /appendFlowchartStatements\(current\.source/);
@@ -361,12 +349,11 @@ test("provides diagram-wide Mermaid styling as a third inspector scope", async (
 
   assert.match(editor, />Properties<\/button>/);
   assert.match(editor, />Appearance<\/button>/);
-  assert.match(editor, /activeDiagramType\.id === "gantt" \? "Config" : "Style"/);
   assert.match(editor, /applyDiagramStyle/);
   assert.match(editor, />Layout<\/span>/);
   assert.match(editor, /Base — customisable/);
   assert.match(editor, /redux-dark-color/);
-  assert.match(editor, /cose-bilkent/);
+  assert.doesNotMatch(editor, /cose-bilkent/);
   assert.match(editor, /This preset owns its palette/);
   assert.match(editor, /Rendering styles and layouts require Mermaid 11/);
   assert.doesNotMatch(editor, /diagram-style-heading/);
@@ -375,7 +362,6 @@ test("provides diagram-wide Mermaid styling as a third inspector scope", async (
 test("loads optional Mermaid engines and layout plugins only when requested", async () => {
   const runtime = await readFile(new URL("../app/editor/mermaid-runtime.ts", import.meta.url), "utf8");
 
-  assert.match(runtime, /diagramTypeId === "zenuml"/);
   assert.match(runtime, /layout === "elk" \|\| layout === "tidy-tree"/);
   assert.match(runtime, /ensureMermaidFeature/);
   assert.doesNotMatch(runtime, /Promise\.all\(\[\s*import\("@mermaid-js\/layout-elk"\)/);
@@ -384,10 +370,9 @@ test("loads optional Mermaid engines and layout plugins only when requested", as
 test("guards incompatible Tidy Tree graphs and clears stale failed renders", async () => {
   const editor = await readFile(new URL("../app/mermaid-editor.tsx", import.meta.url), "utf8");
 
-  assert.match(editor, /layoutCompatibilityError\(patch\.layout, activeDiagramType\.id/);
+  assert.match(editor, /layoutCompatibilityError\(patch\.layout,/);
   assert.match(editor, /host\.replaceChildren\(\);[\s\S]*?setMermaidRenderError\(currentLayoutCompatibilityError\)/);
   assert.match(editor, /catch \(error\) \{[\s\S]*?host\.replaceChildren\(\);[\s\S]*?setMermaidRenderError/);
-  assert.match(editor, /value !== "tidy-tree" \|\| diagramTypeId === "flowchart" \|\| diagramTypeId === "mindmap"/);
 });
 
 test("keeps the workspace chrome visible while the Style pane scrolls", async () => {
@@ -416,7 +401,7 @@ test("exposes verified layered Mermaid repair options", async () => {
 
   assert.match(editor, /createRepairProposals/);
   assert.match(editor, /await validateSource\(option\.source, version\)/);
-  assert.match(editor, /Repair Mermaid \{statusDiagramType\.label\}/);
+  assert.match(editor, /Repair Mermaid Flowchart/);
   assert.match(editor, />Apply verified fix<\/button>/);
   assert.match(editor, /setInvalidSource\(sourceDraft\)/);
 });
@@ -453,10 +438,7 @@ test("normalises specialised Mermaid SVG rendering without changing source", asy
   ]);
 
   assert.match(rendering, /svg\.setAttribute\("preserveAspectRatio", "xMidYMid meet"\)/);
-  assert.match(rendering, /diagramTypeId === "c4"/);
-  assert.match(rendering, /viewBox\.x \+ viewBox\.width \/ 2/);
-  assert.match(rendering, /title\.setAttribute\("text-anchor", "middle"\)/);
-  assert.match(editor, /normalizeSvgMarkup\(svg, activeDiagramType\.id, source\)/);
+  assert.match(editor, /normalizeSvgMarkup\(svg\)/);
 });
 
 test("ships the approved Mermaid-pink brand assets", async () => {

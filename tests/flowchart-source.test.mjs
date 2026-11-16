@@ -1,80 +1,8 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
-import ts from "typescript";
+import { loadTypeScript } from "./helpers/load-typescript.mjs";
 
-async function loadFlowchartSourceHelpers() {
-  const source = await readFile(new URL("../app/flowchart-source.ts", import.meta.url), "utf8");
-  const javascript = ts.transpileModule(source, {
-    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
-  }).outputText;
-  return import(`data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`);
-}
-
-test("identifies flowcharts the generated model can round-trip losslessly", async () => {
-  const { canUseNativeFlowchartEditor } = await loadFlowchartSourceHelpers();
-  const source = `---
-config:
-  theme: 'base'
----
-flowchart TB
-  subgraph checkout["Checkout"]
-    cart@{ shape: rect, label: "Cart" }
-    pay{"Approved?"}
-  end
-  cart -->|"Submit"| pay
-  style cart fill:#ffffff,stroke:#77737f,color:#24232a,stroke-width:1.5px`;
-
-  assert.equal(canUseNativeFlowchartEditor(source), true);
-});
-
-test("preserves complex valid Mermaid instead of converting it lossily", async () => {
-  const { canUseNativeFlowchartEditor } = await loadFlowchartSourceHelpers();
-  const unsupportedStatements = [
-    "%% preserve this explanation",
-    "A --> B --> C",
-    "A --> B & C",
-    'A -- "Approved" --> B',
-    "direction LR",
-    "classDef important fill:#fff4dd,stroke:#8c52ff",
-    "class A important",
-    "style A fill:#fff4dd,stroke:#8c52ff",
-    'click A "/details" "Open details"',
-  ];
-
-  for (const statement of unsupportedStatements) {
-    assert.equal(
-      canUseNativeFlowchartEditor(`flowchart TB\n  A[Start]\n  B[Next]\n  C[Done]\n  ${statement}`),
-      false,
-      `${statement} must remain source-authoritative`,
-    );
-  }
-});
-
-test("preserves flowcharts with frontmatter outside Mermade's style model", async () => {
-  const { canUseNativeFlowchartEditor } = await loadFlowchartSourceHelpers();
-  const source = `---
-title: Checkout lifecycle
-config:
-  theme: 'base'
----
-flowchart LR
-  A --> B`;
-
-  assert.equal(canUseNativeFlowchartEditor(source), false);
-});
-
-test("rejects nested subgraphs that the native model cannot retain", async () => {
-  const { canUseNativeFlowchartEditor } = await loadFlowchartSourceHelpers();
-  const source = `flowchart TB
-  subgraph outer["Outer"]
-    subgraph inner["Inner"]
-      A[Step]
-    end
-  end`;
-
-  assert.equal(canUseNativeFlowchartEditor(source), false);
-});
+const loadFlowchartSourceHelpers = () => loadTypeScript(new URL("../app/flowchart-source.ts", import.meta.url));
 
 test("patches advanced source without discarding comments, classes, or click directives", async () => {
   const {
@@ -483,4 +411,22 @@ test("removes an empty subgraph frame when its final orphan is deleted", async (
   assert.doesNotMatch(updated, /^\s*direction\s+LR\s*$/m);
   assert.match(updated, /%% this explanation remains useful/);
   assert.match(updated, /keep\[Keep\]/);
+});
+
+test("new identifiers cannot redefine inline, unprojected or grouped source nodes", async () => {
+  const { uniqueFlowchartId } = await loadFlowchartSourceHelpers();
+  assert.equal(uniqueFlowchartId("flowchart LR; node1[Keep original]", "node"), "node2");
+  assert.equal(uniqueFlowchartId("flowchart LR\n node1 & node2 --> group1\n subgraph group2[Team]\n node3\n end", "group"), "group3");
+  for (const connector of ["-->", "---", "-.->", "-.-", "==>", "===", "--o", "--x", "<-->"]) {
+    assert.equal(uniqueFlowchartId(`flowchart LR; node1${connector}B`, "node"), "node2", connector);
+    assert.equal(uniqueFlowchartId(`flowchart LR; A${connector}node1`, "node"), "node2", `target ${connector}`);
+  }
+  assert.equal(uniqueFlowchartId("flowchart LR; group1-->node1", "group"), "group2");
+  assert.equal(uniqueFlowchartId("flowchart LR; A--ogroup1", "group"), "group2");
+  assert.equal(uniqueFlowchartId("flowchart TB", "node"), "node1");
+});
+
+test("direction changes preserve the flowchart-elk declaration", async () => {
+  const { updateFlowchartDirection } = await loadFlowchartSourceHelpers();
+  assert.equal(updateFlowchartDirection("flowchart-elk TB\n A --> B", "LR"), "flowchart-elk LR\n A --> B");
 });

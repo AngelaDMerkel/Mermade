@@ -1,4 +1,4 @@
-import { detectDiagramType, MERMAID_DIAGRAM_TYPES } from "./mermaid-types";
+import { isFlowchartSource } from "./mermaid-source";
 
 export type RepairVersion = "11.16.0" | "10.9.6";
 
@@ -11,16 +11,6 @@ export type RepairProposal = {
   source: string;
   version?: RepairVersion;
 };
-
-const HEADER_REPAIRS: Array<[RegExp, string]> = [
-  [/^\s*flow\s*chart\b/im, "flowchart"],
-  [/^\s*sequence\s+diagram\b/im, "sequenceDiagram"],
-  [/^\s*state\s+diagram(?:-v2)?\b/im, "stateDiagram-v2"],
-  [/^\s*class\s+diagram(?:-v2)?\b/im, "classDiagram"],
-  [/^\s*er\s+diagram\b/im, "erDiagram"],
-  [/^\s*git\s+graph\b/im, "gitGraph"],
-  [/^\s*quadrant\s+chart\b/im, "quadrantChart"],
-];
 
 function add(proposals: RepairProposal[], proposal: RepairProposal) {
   if (!proposals.some((current) => current.source === proposal.source && current.version === proposal.version)) proposals.push(proposal);
@@ -35,7 +25,7 @@ function stripMermaidWrapper(source: string) {
   const trimmed = source.trim();
   const wrapped = trimmed.match(/^<mermaid(?:\s+[^>]*)?>\s*([\s\S]*?)\s*<\/mermaid>$/i);
   if (wrapped?.[1]) return wrapped[1].trim().replace(/^raw\s*\r?\n/i, "");
-  if (detectDiagramType(trimmed) && /<\/mermaid>\s*$/i.test(trimmed)) {
+  if (isFlowchartSource(trimmed) && /<\/mermaid>\s*$/i.test(trimmed)) {
     return trimmed.replace(/\s*<\/mermaid>\s*$/i, "");
   }
   return source;
@@ -70,35 +60,6 @@ function normalizeTypography(source: string) {
     .replace(/\u00a0/g, " ");
 }
 
-function repairHeader(source: string) {
-  for (const [pattern, replacement] of HEADER_REPAIRS) {
-    if (pattern.test(source)) return source.replace(pattern, replacement);
-  }
-  return source;
-}
-
-function inferDiagramTypeId(source: string, fallbackId: string) {
-  const detected = detectDiagramType(source);
-  if (detected) return detected.id;
-  const text = source.toLowerCase();
-  if (/\bparticipant\b|--?>>|--?>/.test(source) && /:\s*\S/.test(source)) return "sequence";
-  if (/\bclass\s+\w+|<\|--|\*--|o--/.test(source)) return "class";
-  if (/\|[|o}{]--[|o}{]|\bentity\b/.test(source)) return "er";
-  if (/\bdateformat\b|\bsection\b[\s\S]*\b\d+d\b/.test(text)) return "gantt";
-  if (/\bcommit\b|\bcheckout\b|\bbranch\b/.test(text)) return "gitGraph";
-  if (/\bstate\b|\[\*\]\s*-->/.test(source)) return "state";
-  if (/\bperson\(|\bsystem\(|\brel\(/i.test(source)) return "c4";
-  if (/\bsubgraph\b|-->|---|-\.->|==>/.test(source)) return "flowchart";
-  return fallbackId;
-}
-
-function addDiagramDeclaration(source: string, typeId: string) {
-  if (detectDiagramType(source)) return source;
-  const type = MERMAID_DIAGRAM_TYPES.find((candidate) => candidate.id === typeId);
-  const declaration = type?.template.split(/\r?\n/)[0];
-  return declaration ? `${declaration}\n${source.trimStart()}` : source;
-}
-
 function balanceFlowchartSubgraphs(source: string) {
   const body = source.split(/\r?\n/);
   const opens = body.filter((line) => /^\s*subgraph\b/i.test(line)).length;
@@ -118,7 +79,7 @@ function convertExpandedShapesToLegacy(source: string) {
   });
 }
 
-export function createRepairProposals(source: string, selectedVersion: RepairVersion, fallbackTypeId = "flowchart") {
+export function createRepairProposals(source: string, selectedVersion: RepairVersion) {
   const proposals: RepairProposal[] = [];
   const withoutFence = stripMarkdownFence(source);
   if (withoutFence !== source) add(proposals, {
@@ -150,7 +111,7 @@ export function createRepairProposals(source: string, selectedVersion: RepairVer
     source: normalized,
   });
 
-  const repairedHeader = repairHeader(normalized);
+  const repairedHeader = normalized.replace(/^\s*flow\s*chart\b/im, "flowchart");
   if (repairedHeader !== normalized) add(proposals, {
     id: "repair-declaration",
     title: "Correct the diagram declaration",
@@ -160,21 +121,23 @@ export function createRepairProposals(source: string, selectedVersion: RepairVer
     source: repairedHeader,
   });
 
-  const inferredTypeId = inferDiagramTypeId(repairedHeader, fallbackTypeId);
-  const withDeclaration = addDiagramDeclaration(repairedHeader, inferredTypeId);
+  // A missing header is repairable only when the first statement resembles a
+  // flowchart. Never turn an unsupported chart declaration into a node label.
+  const withDeclaration = !isFlowchartSource(repairedHeader) && /^(?:\s*%%[^\n]*\n)*\s*(?:subgraph\b|[A-Za-z_][\w-]*(?:\[|\(|\{|\s*(?:-->|---|-\.->|==>)))/.test(repairedHeader)
+    ? `flowchart LR\n${repairedHeader.trimStart()}`
+    : repairedHeader;
   if (withDeclaration !== repairedHeader) {
-    const label = MERMAID_DIAGRAM_TYPES.find((type) => type.id === inferredTypeId)?.label || "diagram";
     add(proposals, {
-      id: `add-${inferredTypeId}-declaration`,
-      title: `Add the ${label} declaration`,
-      description: `The content resembles a ${label}; add its required first line.`,
-      confidence: inferredTypeId === fallbackTypeId ? "medium" : "high",
+      id: "add-flowchart-declaration",
+      title: "Add the Flowchart declaration",
+      description: "The content resembles a flowchart; add its required first line.",
+      confidence: "medium",
       category: "diagram",
       source: withDeclaration,
     });
   }
 
-  const withValidLabels = inferredTypeId === "flowchart" ? repairEmptyFlowchartNodeLabels(withDeclaration) : withDeclaration;
+  const withValidLabels = isFlowchartSource(withDeclaration) ? repairEmptyFlowchartNodeLabels(withDeclaration) : withDeclaration;
   if (withValidLabels !== withDeclaration) add(proposals, {
     id: "repair-empty-flowchart-labels",
     title: "Repair empty node labels",
@@ -184,7 +147,7 @@ export function createRepairProposals(source: string, selectedVersion: RepairVer
     source: withValidLabels,
   });
 
-  if (inferredTypeId === "flowchart") {
+  if (isFlowchartSource(withDeclaration)) {
     const balanced = balanceFlowchartSubgraphs(withValidLabels);
     if (balanced !== withValidLabels) add(proposals, {
       id: "close-subgraphs",
@@ -219,10 +182,9 @@ export function createRepairProposals(source: string, selectedVersion: RepairVer
     });
   }
 
-  const combinedBase = addDiagramDeclaration(repairHeader(normalizeTypography(stripMermaidWrapper(stripMarkdownFence(source)))), inferredTypeId);
-  const combined = inferredTypeId === "flowchart"
-    ? balanceFlowchartSubgraphs(repairEmptyFlowchartNodeLabels(combinedBase))
-    : combinedBase;
+  const combined = isFlowchartSource(withDeclaration)
+    ? balanceFlowchartSubgraphs(repairEmptyFlowchartNodeLabels(withDeclaration))
+    : withDeclaration;
   if (combined !== source) add(proposals, {
     id: "apply-safe-repairs",
     title: "Apply all safe repairs",

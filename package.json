@@ -7,19 +7,19 @@
     "node": ">=22.13.0"
   },
   "scripts": {
-    "patch:mermaid": "node scripts/patch-mermaid-block-renderer.mjs",
-    "dev": "npm run patch:mermaid && next dev",
-    "build": "npm run patch:mermaid && next build",
-    "build:pages": "npm run patch:mermaid && MERMADE_GITHUB_PAGES=true next build",
+    "dev": "npm run patch:elk && next dev",
+    "build": "npm run patch:elk && next build",
+    "build:pages": "npm run patch:elk && MERMADE_GITHUB_PAGES=true next build",
     "start": "next start",
     "test": "MERMADE_TEST_BUILD=true npm run build && MERMADE_TEST_BUILD=true node --test tests/*.test.mjs",
-    "test:unit": "npm run patch:mermaid && node scripts/test-unit.mjs",
-    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern .next-test"
+    "test:unit": "npm run patch:elk && node scripts/test-unit.mjs",
+    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern .next-test",
+    "patch:elk": "node scripts/patch-mermaid-elk.mjs",
+    "benchmark:layout": "node scripts/benchmark-layout.mjs"
   },
   "dependencies": {
     "@mermaid-js/layout-elk": "^0.2.2",
     "@mermaid-js/layout-tidy-tree": "^0.2.2",
-    "@mermaid-js/mermaid-zenuml": "^0.2.3",
     "beautiful-mermaid": "^1.1.3",
     "lucide-react": "^0.468.0",
     "mermaid": "^11.16.0",
@@ -35,6 +35,7 @@
     "eslint": "9.39.4",
     "eslint-config-next": "16.2.12",
     "playwright-core": "^1.57.0",
+    "tailwindcss": "4.2.1",
     "typescript": "5.9.3",
     "vite": "8.2.0"
   },

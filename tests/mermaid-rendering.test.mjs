@@ -1,40 +1,34 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
-import ts from "typescript";
+import { loadTypeScript } from "./helpers/load-typescript.mjs";
 
-async function loadRenderingHelpers() {
-  const ganttSource = await readFile(new URL("../app/gantt-source.ts", import.meta.url), "utf8");
-  const ganttJavascript = ts.transpileModule(ganttSource, {
-    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
-  }).outputText;
-  const ganttUrl = `data:text/javascript;base64,${Buffer.from(ganttJavascript).toString("base64")}`;
-  const source = await readFile(new URL("../app/mermaid-rendering.ts", import.meta.url), "utf8");
-  const javascript = ts.transpileModule(source, {
-    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
-  }).outputText.replace('from "./gantt-source"', `from ${JSON.stringify(ganttUrl)}`);
-  return import(`data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`);
-}
+const loadRenderingHelpers = () => loadTypeScript(new URL("../app/mermaid-rendering.ts", import.meta.url));
 
-test("maps rendered labels back to statements across Mermaid diagram families", async () => {
-  const { sourceLineForRenderedText } = await loadRenderingHelpers();
+test("maps rendered labels back to statements in flowcharts", async () => {
+  const { createRenderedLabelResolver } = await loadRenderingHelpers();
   const examples = [
-    ["stateDiagram-v2\n  [*] --> Ready\n  Ready --> [*]", "Ready", 1],
-    ["sequenceDiagram\n  Alice->>Bob: Hello there\n  Bob-->>Alice: Ready", "Hello there", 1],
-    ["classDiagram\n  class User\n  User : +String name", "String name", 2],
-    ["erDiagram\n  CUSTOMER ||--o{ ORDER : places", "CUSTOMER", 1],
-    ["gantt\n  title Project plan\n  section Plan\n  First task :a1, 2026-01-01, 3d", "First task", 3],
-    ["xychart-beta\n  title \"Trend\"\n  x-axis [Jan, Feb, Mar]\n  line [20, 55, 80]", "Trend", 1],
+    ['flowchart LR\n A[Start] --> B[Finish]', "Start", 1],
+    ['graph TD\n A[First]\n B[Second]', "Second", 2],
   ];
 
   for (const [source, label, expectedLine] of examples) {
-    assert.equal(sourceLineForRenderedText(source, label), expectedLine, label);
+    assert.equal(createRenderedLabelResolver(source)(label), expectedLine, label);
   }
 });
 
 test("does not bind short or unrelated SVG text to an arbitrary statement", async () => {
-  const { sourceLineForRenderedText } = await loadRenderingHelpers();
+  const { createRenderedLabelResolver } = await loadRenderingHelpers();
   const source = "flowchart LR\n  A[Start] --> B[Finish]";
-  assert.equal(sourceLineForRenderedText(source, "A"), -1);
-  assert.equal(sourceLineForRenderedText(source, "Missing"), -1);
+  assert.equal(createRenderedLabelResolver(source)("A"), -1);
+  assert.equal(createRenderedLabelResolver(source)("Missing"), -1);
+});
+
+test("repeated rendered labels consume matching source lines in order and reuse the first when exhausted", async () => {
+  const { createRenderedLabelResolver } = await loadRenderingHelpers();
+  const resolve = createRenderedLabelResolver('flowchart LR\n %% repeated comment\n A["Repeated <b>label</b>"] --> B\n C[Repeated label]\n D[Other label]');
+  assert.equal(resolve("Repeated label"), 2);
+  assert.equal(resolve(" Other   label "), 4);
+  assert.equal(resolve("repeated label"), 3);
+  assert.equal(resolve("Repeated label"), 2);
+  assert.equal(resolve("Missing"), -1);
 });

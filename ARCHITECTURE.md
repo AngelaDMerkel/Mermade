@@ -18,13 +18,15 @@ source that the projection cannot represent.
 ## Module responsibilities
 
 - `diagram-types.ts`: the persisted document and visual graph contracts.
-- `diagram-model.ts`: starter/blank documents, source projection, serialisation and existing restoration/normalisation rules. No React or browser APIs.
+- `diagram-model.ts`: starter/blank documents, source projection, serialisation and a single storage restoration pass. No React or browser APIs.
 - `mermaid-version.ts`: bundled engine selection and syntax version hints.
 - `document-session.ts`: immutable document transitions, bounded history and async edit tickets. No React or renderer dependency.
 - `use-document-session.ts`: React subscription and unmount invalidation.
 - `source-edit.ts`: candidate preparation, injected validation and conditional commit. The UI receives success, rejection or cancellation.
-- `mermaid-runtime.ts`: lazy engine/plugin imports, strict configuration, serialised validation/rendering and temporary DOM cleanup.
+- `mermaid-runtime.ts`: lazy engine/layout imports, strict configuration, serialised validation/rendering and temporary DOM cleanup.
 - `browser-storage.ts`: safe acquisition of browser storage. The existing `local-diagram-library.ts` owns the on-disk keys and library format.
+- `mermaid-source.ts`: flowchart scope and frontmatter splitting shared by projection, style and export.
+- `mermaid-rendering.ts`: SVG hit targets, source label resolution, model identity binding and selection outlines. Source lines are normalised once per render, with repeated labels resolved in source order.
 - `mermaid-editor.tsx`: UI, canvas gestures, selection, local library orchestration and renderer presentation.
 
 ## Adding or changing editing features
@@ -70,3 +72,42 @@ syntax can render without appearing completely in the projected graph. Keep
 patching authoritative source and test unsupported syntax when extending visual
 editing. The renderer queue prevents configuration overlap but does not move SVG
 rendering off the main thread or cancel already-running Mermaid work.
+
+## Flowchart-only scope
+
+The editor accepts only `flowchart`, `graph`, and `flowchart-elk` declarations.
+`mermaid-source.ts` recognises these after frontmatter and comments; source
+transactions and both presentation adapters enforce the same policy before
+calling a renderer. Mermaid remains the syntax authority after that check.
+There is no diagram-family registry, type picker, Structured/Data workspace,
+Gantt model, ZenUML plugin, or Block renderer patch.
+
+Restoration repairs and projects supported source once. It indexes cached nodes
+and skips layout when every projected node already has a stored position.
+Unprojectable documents have no cached visual elements.
+
+Restoration preserves older non-flowchart source verbatim. The library keeps
+those documents available, while the UI disables visual tools and offers source
+viewing, copying and export. Source replacement still goes through the validated
+transaction. Tests cover rejected imports, unchanged history, and recovery from
+browser storage.
+
+The build retains a narrowly scoped ELK compatibility patch: ELK graph logging
+and cloning must omit DOM-backed fields to avoid React's circular metadata.
+The former Block and Gantt patches are removed. The real browser suite tests ELK
+inside React, since standalone Mermaid rendering does not expose this failure.
+
+## Layout cost
+
+FreeForm layout builds layer and lane membership once, reuses node order between
+crossing-reduction passes, and scores each node once per pass. Cycle detection
+uses iterative graph traversals, so long imported chains do not exhaust the
+JavaScript call stack. The previous implementation rescanned the full graph for
+each rank/lane and rebuilt all layer positions for every sort.
+
+`npm run benchmark:layout` measures synthetic 1,000-node chains and 600-node
+grouped graphs. A local comparison measured medians of 280 ms → 2.1 ms and
+24.9 ms → 1.4 ms respectively; these are layout-only timings, not browser-render
+benchmarks. A seeded differential check retained identical coordinates, ranks,
+and iteration order in 600 comparisons. Regression coverage includes 6,000-node
+chains and cycles.

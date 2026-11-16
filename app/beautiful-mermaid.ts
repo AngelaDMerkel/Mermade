@@ -1,3 +1,4 @@
+import { requireFlowchartSource, splitFrontmatter } from "./mermaid-source";
 import { BeautifulTextRoles, polishedTextRoles, PolishedStyle, themeForPolishedRenderer } from "./beautiful-mermaid-config";
 
 export {
@@ -5,19 +6,11 @@ export {
   accessiblePolishedTextColour,
   normalisePolishedStyle,
   polishedTextRoles,
-  POLISHED_DIAGRAM_TYPE_IDS,
   POLISHED_THEME_OPTIONS,
   POLISHED_THEME_PREVIEWS,
-  supportsPolishedDiagram,
   themeForPolishedRenderer,
 } from "./beautiful-mermaid-config";
 export type { BeautifulThemeColours, PolishedCustomColours, PolishedPaletteMode, PolishedStyle, PolishedTheme } from "./beautiful-mermaid-config";
-
-function withoutFrontmatter(source: string) {
-  const trimmed = source.trimStart();
-  if (!trimmed.startsWith("---")) return trimmed;
-  return trimmed.replace(/^---\s*\r?\n[\s\S]*?\r?\n---\s*(?:\r?\n|$)/, "").trimStart();
-}
 
 function legacyNodeSyntax(id: string, shape: string, label: string) {
   const text = label.replaceAll("\\\"", "\"").replaceAll("\"", "'");
@@ -67,7 +60,7 @@ function supplyBeautifulFlowchartDirection(source: string) {
  * presentation. The source stored by Mermade is never rewritten.
  */
 function withoutFlowchartPresentationDirectives(source: string) {
-  if (!/^\s*(?:flowchart|graph|stateDiagram(?:-v2)?)\b/im.test(source)) return source;
+  if (!/^\s*(?:flowchart|graph)\b/im.test(source)) return source;
   return source
     .replace(/(^|[;\n])\s*(?:classDef|style|linkStyle)\b[^;\n]*/gim, "$1")
     .replace(/(^|[;\n])\s*class\s+[\w,-]+\s+[\w-]+\s*(?=;|\n|$)/gim, "$1")
@@ -80,7 +73,8 @@ function withoutFlowchartPresentationDirectives(source: string) {
  * canonical source stored by Mermade.
  */
 export function sourceForPolishedRenderer(source: string, respectSourceStyles = false) {
-  const withoutYaml = withoutFrontmatter(source).replace(/^(\s*)flowchart-elk\b/im, "$1flowchart");
+  requireFlowchartSource(source);
+  const withoutYaml = splitFrontmatter(source).body.trimStart().replace(/^(\s*)flowchart-elk\b/im, "$1flowchart");
   const adapted = supplyBeautifulFlowchartDirection(adaptExpandedFlowchartNodes(withoutYaml));
   return respectSourceStyles ? adapted : withoutFlowchartPresentationDirectives(adapted);
 }
@@ -164,11 +158,5 @@ export async function renderPolishedSvg(source: string, style: PolishedStyle) {
     layerSpacing: style.layerSpacing,
     componentSpacing: style.componentSpacing,
     transparent: style.transparent,
-    interactive: style.interactive,
   }), textRoles);
-}
-
-export async function renderPolishedAscii(source: string, useAscii = true) {
-  const { renderMermaidASCII } = await import("beautiful-mermaid");
-  return renderMermaidASCII(sourceForPolishedRenderer(source), { colorMode: "none", useAscii });
 }

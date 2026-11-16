@@ -1,3 +1,5 @@
+import { splitFrontmatter } from "./mermaid-source";
+
 export type MermaidTheme = "default" | "base" | "dark" | "forest" | "neutral" | "neo" | "neo-dark" | "redux" | "redux-dark" | "redux-color" | "redux-dark-color" | "null";
 export type MermaidLook = "classic" | "handDrawn" | "neo";
 export type MermaidLayout = "dagre" | "elk" | "tidy-tree" | "cose-bilkent";
@@ -50,19 +52,6 @@ function unquote(value: string) {
   return trimmed;
 }
 
-function frontmatterParts(source: string) {
-  const leading = source.match(/^\s*/)?.[0] || "";
-  const trimmed = source.slice(leading.length);
-  if (!trimmed.startsWith("---")) return { leading, lines: [] as string[], body: trimmed };
-  const match = trimmed.match(/^---\s*\r?\n([\s\S]*?)\r?\n---\s*(?:\r?\n|$)/);
-  if (!match) return { leading, lines: [] as string[], body: trimmed };
-  return {
-    leading,
-    lines: match[1].split(/\r?\n/),
-    body: trimmed.slice(match[0].length),
-  };
-}
-
 function sectionEnd(lines: string[], start: number, indent: number) {
   let index = start + 1;
   for (; index < lines.length; index += 1) {
@@ -98,7 +87,7 @@ function removeScalar(lines: string[], key: string, indent: number, withinStart:
 }
 
 export function applyDiagramStyle(source: string, style: DiagramStyle) {
-  const parts = frontmatterParts(source);
+  const parts = splitFrontmatter(source);
   const lines = [...parts.lines];
   const configStart = ensureMapping(lines, "config", 0);
   let configEnd = sectionEnd(lines, configStart, 0);
@@ -138,7 +127,7 @@ export function applyDiagramStyle(source: string, style: DiagramStyle) {
 }
 
 export function readDiagramStyle(source: string): DiagramStyle {
-  const { lines } = frontmatterParts(source);
+  const { lines } = splitFrontmatter(source);
   if (!lines.length) return { ...DEFAULT_DIAGRAM_STYLE };
   const read = (key: string) => {
     const match = lines.map((line) => line.trim()).find((line) => line.startsWith(`${key}:`))?.match(/^[^:]+:\s*(.*)$/);

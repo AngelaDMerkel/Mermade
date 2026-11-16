@@ -15,13 +15,3 @@ test("the installed ELK renderer omits DOM-backed fields from serialisation", as
   assert.doesNotMatch(renderer, /JSON\.stringify\(elkGraph, null, 2\)/);
   assert.doesNotMatch(renderer, /JSON\.parse\(JSON\.stringify\(node\)\)/);
 });
-
-test("the compatibility patch covers Mermaid and the external ELK package", async () => {
-  const patchScript = await readFile(new URL("../scripts/patch-mermaid-block-renderer.mjs", import.meta.url), "utf8");
-
-  assert.match(patchScript, /node_modules\/@mermaid-js\/layout-elk\/dist/);
-  assert.match(patchScript, /JSON\.stringify\(elkGraph, null, 2\)/);
-  assert.match(patchScript, /key === "domId" \|\| key === "labelNode"/);
-  assert.match(patchScript, /Mermade exact until target/);
-  assert.match(patchScript, /until\\\\s\+/);
-});
